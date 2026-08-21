@@ -316,6 +316,21 @@ func createSchema(db *sql.DB) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_ai_messages_conversation ON ai_messages(conversation)`,
 		`CREATE INDEX IF NOT EXISTS idx_ai_messages_owner ON ai_messages(owner)`,
+		`CREATE TABLE IF NOT EXISTS work_memos (
+			content TEXT DEFAULT '' NOT NULL,
+			created TEXT NOT NULL,
+			date TEXT NOT NULL,
+			id TEXT PRIMARY KEY NOT NULL,
+			is_pinned INTEGER DEFAULT 0 NOT NULL,
+			owner TEXT NOT NULL,
+			position INTEGER DEFAULT 0 NOT NULL,
+			status TEXT DEFAULT 'normal' NOT NULL CHECK(status IN ('normal', 'pending', 'completed')),
+			tags JSON DEFAULT '[]' NOT NULL,
+			updated TEXT NOT NULL,
+			FOREIGN KEY(owner) REFERENCES users(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_work_memos_owner_date_position ON work_memos(owner, date, position)`,
+		`CREATE INDEX IF NOT EXISTS idx_work_memos_owner_updated ON work_memos(owner, updated)`,
 		`INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, datetime('now'))`,
 	}
 	for _, statement := range statements {

@@ -275,6 +275,12 @@ func run(args []string, stdout io.Writer) error {
 		onDiaryChanged,
 	)
 
+	api.RegisterWorkMemoRoutes(
+		e,
+		appStore,
+		authMiddleware,
+	)
+
 	api.RegisterAIRoutes(
 		e,
 		appStore,
