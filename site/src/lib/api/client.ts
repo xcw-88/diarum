@@ -40,6 +40,7 @@ type AuthChangeCallback = () => void;
 
 const tokenKey = 'diarum_auth_token';
 const modelKey = 'diarum_auth_model';
+const mediaAuthCookieName = 'diarum_media_token';
 
 function decodeJwtPayload(token: string): any | null {
     try {
@@ -68,6 +69,8 @@ class AuthStore {
             }
             if (!this.isValid) {
                 this.clear();
+            } else {
+                this.syncMediaAuthCookie();
             }
         }
     }
@@ -86,6 +89,7 @@ class AuthStore {
             localStorage.setItem(tokenKey, token);
             localStorage.setItem(modelKey, JSON.stringify(model));
         }
+        this.syncMediaAuthCookie();
         this.notify();
     }
 
@@ -96,7 +100,27 @@ class AuthStore {
             localStorage.removeItem(tokenKey);
             localStorage.removeItem(modelKey);
         }
+        this.clearMediaAuthCookie();
         this.notify();
+    }
+
+    private syncMediaAuthCookie() {
+        if (typeof document === 'undefined' || !this.token) return;
+
+        const payload = decodeJwtPayload(this.token);
+        const maxAge = payload?.exp
+            ? Math.max(0, Math.floor(payload.exp - Date.now() / 1000))
+            : undefined;
+        const secure = typeof location !== 'undefined' && location.protocol === 'https:' ? '; Secure' : '';
+        const lifetime = maxAge === undefined ? '' : `; Max-Age=${maxAge}`;
+        document.cookie = `${mediaAuthCookieName}=${this.token}; Path=/api/v1/files/media; SameSite=Strict${secure}${lifetime}`;
+    }
+
+    private clearMediaAuthCookie() {
+        if (typeof document === 'undefined') return;
+
+        const secure = typeof location !== 'undefined' && location.protocol === 'https:' ? '; Secure' : '';
+        document.cookie = `${mediaAuthCookieName}=; Path=/api/v1/files/media; SameSite=Strict; Max-Age=0${secure}`;
     }
 
     onChange(callback: AuthChangeCallback) {

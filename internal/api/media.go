@@ -15,6 +15,8 @@ import (
 	"github.com/songtianlun/diarum/internal/store"
 )
 
+const mediaAuthCookieName = "diarum_media_token"
+
 func RegisterMediaRoutes(e *echo.Echo, s *store.Store, authMiddleware echo.MiddlewareFunc) {
 	group := e.Group("/api/v1/media", authMiddleware)
 
@@ -115,7 +117,8 @@ func RegisterMediaRoutes(e *echo.Echo, s *store.Store, authMiddleware echo.Middl
 	})
 
 	e.GET("/api/v1/files/media/:id/:filename", func(c echo.Context) error {
-		media, err := s.GetMedia(c.PathParam("id"), "")
+		user := auth.CurrentUser(c)
+		media, err := s.GetMedia(c.PathParam("id"), user.ID)
 		if err != nil || media.File != c.PathParam("filename") {
 			return notFound("File not found")
 		}
@@ -149,7 +152,27 @@ func RegisterMediaRoutes(e *echo.Echo, s *store.Store, authMiddleware echo.Middl
 		}
 		_, err = io.Copy(c.Response().Writer, reader)
 		return err
-	})
+	}, mediaFileAuthMiddleware(authMiddleware))
+}
+
+// mediaFileAuthMiddleware prevents private media responses, including errors,
+// from being cached and lets browser-managed image requests use the same JWT
+// authentication as API requests. The cookie is path-restricted by the client
+// to the media file route; all token validation and CurrentUser population still
+// go through the existing authentication middleware.
+func mediaFileAuthMiddleware(authMiddleware echo.MiddlewareFunc) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		protected := authMiddleware(next)
+		return func(c echo.Context) error {
+			c.Response().Header().Set(echo.HeaderCacheControl, "private, no-store")
+			if c.Request().Header.Get(echo.HeaderAuthorization) == "" {
+				if cookie, err := c.Request().Cookie(mediaAuthCookieName); err == nil && cookie.Value != "" {
+					c.Request().Header.Set(echo.HeaderAuthorization, "Bearer "+cookie.Value)
+				}
+			}
+			return protected(c)
+		}
+	}
 }
 
 func parsePositiveInt(raw string, fallback int) int {

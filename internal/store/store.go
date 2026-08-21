@@ -1172,14 +1172,10 @@ func (s *Store) ListMedia(owner string, page, perPage int) ([]MediaWithExpand, i
 }
 
 func (s *Store) GetMedia(id, owner string) (*Media, error) {
-	media, err := scanMedia(s.DB.QueryRow(`SELECT alt, created, file, id, name, owner, updated, diary FROM media WHERE id = ?`, id))
-	if err != nil {
-		return nil, err
+	if owner != "" {
+		return scanMedia(s.DB.QueryRow(`SELECT alt, created, file, id, name, owner, updated, diary FROM media WHERE id = ? AND owner = ?`, id, owner))
 	}
-	if owner != "" && media.Owner != owner {
-		return nil, sql.ErrNoRows
-	}
-	return media, nil
+	return scanMedia(s.DB.QueryRow(`SELECT alt, created, file, id, name, owner, updated, diary FROM media WHERE id = ?`, id))
 }
 
 func (s *Store) CreateMedia(owner, file, name, alt string, diary []string) (*Media, error) {

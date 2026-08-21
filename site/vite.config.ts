@@ -85,6 +85,7 @@ export default defineConfig({
 			workbox: {
 				globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,woff,woff2}'],
 				cleanupOutdatedCaches: true,
+				skipWaiting: true,
 				clientsClaim: true,
 				runtimeCaching: [
 					{
@@ -113,6 +114,14 @@ export default defineConfig({
 							cacheableResponse: {
 								statuses: [0, 200]
 							}
+						}
+					},
+					{
+						urlPattern: ({ url }) =>
+							url.origin === self.location.origin && url.pathname.startsWith('/api/v1/files/media/'),
+						handler: 'NetworkOnly',
+						options: {
+							fetchOptions: { cache: 'no-store' }
 						}
 					},
 					{
