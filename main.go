@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -45,44 +46,71 @@ func serveSPA(c echo.Context, fsys fs.FS) error {
 	if strings.HasPrefix(path, "/api/") {
 		return echo.ErrNotFound
 	}
-	path = filepath.Clean(path)
+
+	// URL 和 embed.FS 路径始终使用正斜杠，
+	// 不能使用 Windows 文件系统路径规则处理。
+	path = pathpkg.Clean(path)
 	if path == "." {
 		path = "/"
 	}
+
 	path = strings.TrimPrefix(path, "/")
+
 	file, err := fsys.Open(path)
 	if err == nil {
 		defer file.Close()
+
 		stat, err := file.Stat()
 		if err != nil {
 			return err
 		}
+
 		if stat.IsDir() {
 			file.Close()
-			file, err = fsys.Open(filepath.Join(path, "index.html"))
+
+			file, err = fsys.Open(pathpkg.Join(path, "index.html"))
 			if err == nil {
 				defer file.Close()
+
 				stat, err = file.Stat()
 				if err != nil {
 					return err
 				}
 			}
 		}
+
 		if err == nil {
-			http.ServeContent(c.Response(), c.Request(), stat.Name(), stat.ModTime(), file.(io.ReadSeeker))
+			http.ServeContent(
+				c.Response(),
+				c.Request(),
+				stat.Name(),
+				stat.ModTime(),
+				file.(io.ReadSeeker),
+			)
 			return nil
 		}
 	}
+
+	// SPA fallback：找不到静态资源时返回首页。
 	indexFile, err := fsys.Open("index.html")
 	if err != nil {
 		return echo.ErrNotFound
 	}
 	defer indexFile.Close()
+
 	stat, err := indexFile.Stat()
 	if err != nil {
 		return err
 	}
-	http.ServeContent(c.Response(), c.Request(), "index.html", stat.ModTime(), indexFile.(io.ReadSeeker))
+
+	http.ServeContent(
+		c.Response(),
+		c.Request(),
+		"index.html",
+		stat.ModTime(),
+		indexFile.(io.ReadSeeker),
+	)
+
 	return nil
 }
 
@@ -94,21 +122,35 @@ func main() {
 
 func run(args []string, stdout io.Writer) error {
 	command := "serve"
+
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		command = args[0]
 		args = args[1:]
 	}
+
 	if command == "version" {
 		_, err := fmt.Fprintf(stdout, "%s version %s\n", Name, Version)
 		return err
 	}
+
 	if command != "serve" {
 		return fmt.Errorf("unknown command: %s", command)
 	}
 
 	serveFlags := flag.NewFlagSet("serve", flag.ExitOnError)
-	dataDir := serveFlags.String("data-dir", getDataDir(), "the directory to store application data")
-	httpAddr := serveFlags.String("http", ":8090", "HTTP listen address")
+
+	dataDir := serveFlags.String(
+		"data-dir",
+		getDataDir(),
+		"the directory to store application data",
+	)
+
+	httpAddr := serveFlags.String(
+		"http",
+		":8090",
+		"HTTP listen address",
+	)
+
 	if err := serveFlags.Parse(args); err != nil {
 		return err
 	}
@@ -130,64 +172,177 @@ func run(args []string, stdout io.Writer) error {
 	if err != nil {
 		log.Printf("Warning: Failed to initialize vector database: %v", err)
 	}
+
 	var embeddingService *embedding.EmbeddingService
+
 	if vectorDB != nil {
-		embeddingService = embedding.NewEmbeddingService(appStore, vectorDB)
+		embeddingService = embedding.NewEmbeddingService(
+			appStore,
+			vectorDB,
+		)
 	}
 
 	configService := config.NewConfigService(appStore)
 	authService := auth.NewService(appStore)
+
 	e := echo.New()
+
 	e.Use(middleware.Recover())
 	e.Use(middleware.Logger())
 
 	authMiddleware := authService.Middleware
+
 	onDiaryChanged := func(userID string) {
-		enabled, _ := configService.GetBool(userID, "ai.enabled")
+		enabled, _ := configService.GetBool(
+			userID,
+			"ai.enabled",
+		)
+
 		if !enabled || embeddingService == nil {
 			return
 		}
+
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				5*time.Minute,
+			)
 			defer cancel()
-			logger.Info("[AutoVectorBuild] triggered for user: %s", userID)
-			result, err := embeddingService.BuildIncrementalVectors(ctx, userID)
+
+			logger.Info(
+				"[AutoVectorBuild] triggered for user: %s",
+				userID,
+			)
+
+			result, err := embeddingService.BuildIncrementalVectors(
+				ctx,
+				userID,
+			)
+
 			if err != nil {
-				logger.Error("[AutoVectorBuild] failed for user %s: %v", userID, err)
+				logger.Error(
+					"[AutoVectorBuild] failed for user %s: %v",
+					userID,
+					err,
+				)
 				return
 			}
-			logger.Info("[AutoVectorBuild] completed for user %s: %d built, %d failed", userID, result.Success, result.Failed)
+
+			logger.Info(
+				"[AutoVectorBuild] completed for user %s: %d built, %d failed",
+				userID,
+				result.Success,
+				result.Failed,
+			)
 		}()
 	}
 
-	api.RegisterAuthRoutes(e, appStore, authService)
-	api.RegisterDiaryRoutes(e, appStore, authMiddleware, onDiaryChanged)
-	api.RegisterMediaRoutes(e, appStore, authMiddleware)
-	api.RegisterImageUploadRoutes(e, appStore, authMiddleware)
-	api.RegisterSettingsRoutes(e, appStore, authMiddleware)
-	api.RegisterMemosRoutes(e, appStore, authMiddleware, onDiaryChanged)
-	api.RegisterAIRoutes(e, appStore, authMiddleware, embeddingService)
-	api.RegisterExportImportRoutes(e, appStore, authMiddleware, embeddingService)
-	api.RegisterCheveretoRoutes(e, appStore, authMiddleware)
-	api.RegisterPublicRoutes(e, appStore)
-	api.RegisterVersionRoutes(e, Version, Name)
+	api.RegisterAuthRoutes(
+		e,
+		appStore,
+		authService,
+	)
+
+	api.RegisterDiaryRoutes(
+		e,
+		appStore,
+		authMiddleware,
+		onDiaryChanged,
+	)
+
+	api.RegisterMediaRoutes(
+		e,
+		appStore,
+		authMiddleware,
+	)
+
+	api.RegisterImageUploadRoutes(
+		e,
+		appStore,
+		authMiddleware,
+	)
+
+	api.RegisterSettingsRoutes(
+		e,
+		appStore,
+		authMiddleware,
+	)
+
+	api.RegisterMemosRoutes(
+		e,
+		appStore,
+		authMiddleware,
+		onDiaryChanged,
+	)
+
+	api.RegisterAIRoutes(
+		e,
+		appStore,
+		authMiddleware,
+		embeddingService,
+	)
+
+	api.RegisterExportImportRoutes(
+		e,
+		appStore,
+		authMiddleware,
+		embeddingService,
+	)
+
+	api.RegisterCheveretoRoutes(
+		e,
+		appStore,
+		authMiddleware,
+	)
+
+	api.RegisterPublicRoutes(
+		e,
+		appStore,
+	)
+
+	api.RegisterVersionRoutes(
+		e,
+		Version,
+		Name,
+	)
+
 	if logger.GetLevel() <= logger.LevelDebug {
-		api.RegisterOpenAPIRoutes(e, Version, Name)
-		logger.Info("[Docs] OpenAPI docs enabled in debug mode at /api/docs and /api/v1/docs")
+		api.RegisterOpenAPIRoutes(
+			e,
+			Version,
+			Name,
+		)
+
+		logger.Info(
+			"[Docs] OpenAPI docs enabled in debug mode at /api/docs and /api/v1/docs",
+		)
 	}
 
 	staticFS, err := static.GetFS()
+
 	if err != nil {
-		log.Printf("Warning: Failed to get embedded static files: %v", err)
+		log.Printf(
+			"Warning: Failed to get embedded static files: %v",
+			err,
+		)
 	} else {
-		e.GET("/*", func(c echo.Context) error { return serveSPA(c, staticFS) })
+		e.GET(
+			"/*",
+			func(c echo.Context) error {
+				return serveSPA(c, staticFS)
+			},
+		)
 	}
 
-	if err := startServer(e, *httpAddr); err != nil && err != http.ErrServerClosed {
+	if err := startServer(e, *httpAddr); err != nil &&
+		err != http.ErrServerClosed {
+
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
+
 		return err
 	}
+
 	return nil
 }
