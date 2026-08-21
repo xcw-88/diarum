@@ -122,11 +122,11 @@
 	<header class="sticky top-0 z-30 glass border-b border-border/50">
 		<div class="mx-auto max-w-3xl px-4">
 			<div class="flex h-14 items-center justify-between gap-3">
-				<a href="/" class="hidden sm:flex items-center gap-2 text-sm font-medium text-foreground hover:text-primary transition-colors">
+				<a href="/worklog" class="flex items-center gap-1 text-sm font-medium text-foreground hover:text-primary transition-colors" aria-label={$t('worklog.backToCalendar')}>
 					<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
 					</svg>
-					<span>{$t('nav.home')}</span>
+					<span class="hidden sm:inline">{$t('worklog.calendar')}</span>
 				</a>
 				<div class="flex flex-1 items-center justify-center gap-1 sm:gap-2">
 					<button

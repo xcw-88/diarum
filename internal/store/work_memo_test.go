@@ -171,3 +171,78 @@ func TestWorkMemoStoreUpdatePartialDoesNotOverwrite(t *testing.T) {
 		t.Fatalf("tags overwritten: %#v", updated.Tags)
 	}
 }
+
+func TestWorkMemoStoreCountByMonth(t *testing.T) {
+	s := newTestStore(t)
+	user := newTestUser(t, s)
+
+	for _, date := range []string{
+		"2026-07-31",
+		"2026-08-01", "2026-08-01",
+		"2026-08-02",
+		"2026-08-21", "2026-08-21", "2026-08-21",
+		"2026-08-31", "2026-08-31", "2026-08-31",
+		"2026-09-01",
+	} {
+		if _, err := s.CreateWorkMemo(user.ID, CreateWorkMemoInput{Date: date, Content: date}); err != nil {
+			t.Fatalf("create %s: %v", date, err)
+		}
+	}
+
+	items, err := s.CountWorkMemosByMonth(user.ID, "2026-08-01 00:00:00.000Z", "2026-09-01 00:00:00.000Z")
+	if err != nil {
+		t.Fatalf("count by month: %v", err)
+	}
+
+	want := map[string]int{"2026-08-01": 2, "2026-08-02": 1, "2026-08-21": 3, "2026-08-31": 3}
+	if len(items) != len(want) {
+		t.Fatalf("expected %d dates, got %d: %#v", len(want), len(items), items)
+	}
+	for i, item := range items {
+		if item.Count != want[item.Date] {
+			t.Fatalf("item %d date %s count = %d, want %d", i, item.Date, item.Count, want[item.Date])
+		}
+	}
+}
+
+func TestWorkMemoStoreCountByMonthUserIsolation(t *testing.T) {
+	s := newTestStore(t)
+	userA := newTestUser(t, s)
+	userB := newTestUser(t, s)
+
+	if _, err := s.CreateWorkMemo(userA.ID, CreateWorkMemoInput{Date: "2026-08-01", Content: "a1"}); err != nil {
+		t.Fatalf("create a1: %v", err)
+	}
+	if _, err := s.CreateWorkMemo(userA.ID, CreateWorkMemoInput{Date: "2026-08-02", Content: "a2"}); err != nil {
+		t.Fatalf("create a2: %v", err)
+	}
+	if _, err := s.CreateWorkMemo(userB.ID, CreateWorkMemoInput{Date: "2026-08-01", Content: "b1"}); err != nil {
+		t.Fatalf("create b1: %v", err)
+	}
+
+	items, err := s.CountWorkMemosByMonth(userA.ID, "2026-08-01 00:00:00.000Z", "2026-09-01 00:00:00.000Z")
+	if err != nil {
+		t.Fatalf("count by month: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("userA expected 2 dates, got %#v", items)
+	}
+	for _, item := range items {
+		if item.Count != 1 {
+			t.Fatalf("userA date %s count = %d, want 1", item.Date, item.Count)
+		}
+	}
+}
+
+func TestWorkMemoStoreCountByMonthEmptyMonth(t *testing.T) {
+	s := newTestStore(t)
+	user := newTestUser(t, s)
+
+	items, err := s.CountWorkMemosByMonth(user.ID, "2026-08-01 00:00:00.000Z", "2026-09-01 00:00:00.000Z")
+	if err != nil {
+		t.Fatalf("count by month: %v", err)
+	}
+	if items == nil || len(items) != 0 {
+		t.Fatalf("expected empty slice, got %#v", items)
+	}
+}

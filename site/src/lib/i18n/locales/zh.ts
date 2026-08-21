@@ -293,7 +293,13 @@ export const zh = {
 		saved: '已保存',
 		discardChangesConfirm: '有未保存的修改，确定放弃吗？',
 		editMemo: '编辑随记',
-		emptyContent: '无内容'
+		emptyContent: '无内容',
+		calendar: '日历',
+		calendarTitle: '工作随记日历',
+		backToCalendar: '返回工作随记日历',
+		calendarLoadFailed: '工作随记日历加载失败，请重试。',
+		calendarDayCount: '{date}，{count} 条随记',
+		calendarHint: '点击日期查看或新增工作随记。'
 	},
 	win95: {
 		contentsTitle: '日记目录',

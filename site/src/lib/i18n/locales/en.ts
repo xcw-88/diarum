@@ -303,7 +303,13 @@ export const en = {
 		saved: 'Saved',
 		discardChangesConfirm: 'You have unsaved changes. Discard them?',
 		editMemo: 'Edit memo',
-		emptyContent: 'No content'
+		emptyContent: 'No content',
+		calendar: 'Calendar',
+		calendarTitle: 'Worklog calendar',
+		backToCalendar: 'Back to worklog calendar',
+		calendarLoadFailed: 'Failed to load the worklog calendar. Please try again.',
+		calendarDayCount: '{date}, {count} memos',
+		calendarHint: 'Tap a date to view or add work memos.'
 	},
 	win95: {
 		contentsTitle: 'Diary Contents',

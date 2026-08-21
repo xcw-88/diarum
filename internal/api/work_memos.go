@@ -17,6 +17,7 @@ func RegisterWorkMemoRoutes(e *echo.Echo, s *store.Store, authMiddleware echo.Mi
 	group := e.Group("/api/v1/work-memos", authMiddleware)
 
 	group.POST("", createWorkMemoHandler(s))
+	group.GET("/calendar", workMemoCalendarHandler(s))
 	group.GET("/by-date/:date", listWorkMemosByDateHandler(s))
 	group.POST("/reorder", reorderWorkMemosHandler(s))
 	group.GET("/:id", getWorkMemoHandler(s))
@@ -142,6 +143,30 @@ func listWorkMemosByDateHandler(s *store.Store) echo.HandlerFunc {
 			return serverError("Failed to list work memos", err)
 		}
 		return c.JSON(http.StatusOK, map[string]any{"date": date, "memos": formatWorkMemos(memos)})
+	}
+}
+
+// workMemoCalendarHandler returns the number of work memos per day for the
+// authenticated user within a single month. The month query parameter must be
+// a strict YYYY-MM value; it is echoed back unchanged in the response.
+func workMemoCalendarHandler(s *store.Store) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		user := auth.CurrentUser(c)
+		month := c.QueryParam("month")
+		parsed, err := time.Parse("2006-01", month)
+		if err != nil {
+			return badRequest("invalid month", nil)
+		}
+		start := parsed.Format("2006-01-02") + " 00:00:00.000Z"
+		end := parsed.AddDate(0, 1, 0).Format("2006-01-02") + " 00:00:00.000Z"
+		days, err := s.CountWorkMemosByMonth(user.ID, start, end)
+		if err != nil {
+			return serverError("Failed to count work memos", err)
+		}
+		if days == nil {
+			days = []*store.WorkMemoDateCount{}
+		}
+		return c.JSON(http.StatusOK, map[string]any{"month": month, "days": days})
 	}
 }
 

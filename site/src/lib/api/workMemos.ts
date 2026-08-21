@@ -18,6 +18,16 @@ export interface WorkMemoListResult {
 	memos: WorkMemo[];
 }
 
+export interface WorkMemoCalendarDay {
+	date: string;
+	count: number;
+}
+
+export interface WorkMemoCalendarResult {
+	month: string;
+	days: WorkMemoCalendarDay[];
+}
+
 export type WorkMemoStatus = 'normal' | 'pending' | 'completed';
 
 export class WorkMemoApiError extends Error {
@@ -70,6 +80,47 @@ export async function listWorkMemosByDate(
 	return {
 		date: data.date || date,
 		memos: normalizeWorkMemos(data.memos || [])
+	};
+}
+
+/**
+ * Get the per-day work memo counts for one YYYY-MM month.
+ */
+export async function getWorkMemoCalendar(
+	month: string,
+	signal?: AbortSignal
+): Promise<WorkMemoCalendarResult> {
+	const response = await fetch(
+		`/api/v1/work-memos/calendar?month=${encodeURIComponent(month)}`,
+		{
+			headers: { Authorization: `Bearer ${pb.authStore.token}` },
+			signal
+		}
+	);
+
+	if (!response.ok) {
+		handleResponseError(response);
+	}
+
+	const data = await response.json();
+	const days = Array.isArray(data.days)
+		? data.days
+				.filter(
+					(day: unknown): day is { date: string; count: number } =>
+						typeof day === 'object' &&
+						day !== null &&
+						typeof (day as Record<string, unknown>).date === 'string' &&
+						typeof (day as Record<string, unknown>).count === 'number'
+				)
+				.map((day: { date: string; count: number }) => ({
+					date: day.date,
+					count: day.count
+				}))
+		: [];
+
+	return {
+		month: typeof data.month === 'string' ? data.month : month,
+		days
 	};
 }
 

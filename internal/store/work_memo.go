@@ -20,6 +20,12 @@ const (
 // the current set of work memos for the owner and date.
 var ErrInvalidReorder = errors.New("invalid reorder request")
 
+// WorkMemoDateCount is the number of work memos for a single date.
+type WorkMemoDateCount struct {
+	Date  string `json:"date"`
+	Count int    `json:"count"`
+}
+
 // WorkMemo represents a single work memo entry for a given day.
 // Unlike Diary, multiple work memos can exist for the same owner and date.
 type WorkMemo struct {
@@ -171,6 +177,38 @@ func (s *Store) ListWorkMemosByDate(owner, date string) ([]*WorkMemo, error) {
 	}
 	defer rows.Close()
 	return scanWorkMemos(rows)
+}
+
+// CountWorkMemosByMonth returns the number of work memos per date for the
+// owner within the half-open range [start, end). start and end must be in the
+// internal storage format "YYYY-MM-DD 00:00:00.000Z". Only dates with at least
+// one memo are returned, ordered by date ascending. A single query covers the
+// whole range so callers never need to issue one request per day.
+func (s *Store) CountWorkMemosByMonth(owner, start, end string) ([]*WorkMemoDateCount, error) {
+	if owner == "" {
+		return nil, fmt.Errorf("owner is required")
+	}
+	rows, err := s.DB.Query(
+		`SELECT substr(date, 1, 10) AS date, COUNT(*) AS count
+		FROM work_memos
+		WHERE owner = ? AND date >= ? AND date < ?
+		GROUP BY substr(date, 1, 10)
+		ORDER BY date ASC`,
+		owner, start, end,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]*WorkMemoDateCount, 0)
+	for rows.Next() {
+		item := &WorkMemoDateCount{}
+		if err := rows.Scan(&item.Date, &item.Count); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 
 // UpdateWorkMemo applies a partial update to an existing work memo. Ownership is

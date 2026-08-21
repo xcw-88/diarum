@@ -716,3 +716,175 @@ func TestWorkMemoValidation(t *testing.T) {
 		t.Fatalf("reorder without date status = %d, want 400", rec.Code)
 	}
 }
+
+func workMemoCalendar(t *testing.T, e *echo.Echo, month string) map[string]any {
+	t.Helper()
+	url := "/api/v1/work-memos/calendar?month=" + month
+	rec := performRequest(t, e, http.MethodGet, url, nil, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("calendar status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	return decodeJSONBody(t, rec)
+}
+
+func workMemoCalendarDays(t *testing.T, e *echo.Echo, month string) map[string]int {
+	t.Helper()
+	payload := workMemoCalendar(t, e, month)
+	if payload["month"] != month {
+		t.Fatalf("month echoed = %q, want %q", payload["month"], month)
+	}
+	rawDays, ok := payload["days"].([]any)
+	if !ok {
+		t.Fatalf("days is not an array: %#v", payload["days"])
+	}
+	out := make(map[string]int, len(rawDays))
+	for _, raw := range rawDays {
+		day := raw.(map[string]any)
+		date := day["date"].(string)
+		out[date] = int(day["count"].(float64))
+	}
+	return out
+}
+
+func TestWorkMemoCalendarSameDayMultipleEntries(t *testing.T) {
+	s := newTestStore(t)
+	user := newTestUser(t, s)
+	e := registerWorkMemoTestRoutes(t, s, user)
+
+	createWorkMemoAuto(t, e, "2026-08-01", "one")
+	createWorkMemoAuto(t, e, "2026-08-01", "two")
+
+	days := workMemoCalendarDays(t, e, "2026-08")
+	if days["2026-08-01"] != 2 {
+		t.Fatalf("2026-08-01 count = %d, want 2", days["2026-08-01"])
+	}
+	if len(days) != 1 {
+		t.Fatalf("expected exactly 1 date, got %#v", days)
+	}
+}
+
+func TestWorkMemoCalendarMultipleDates(t *testing.T) {
+	s := newTestStore(t)
+	user := newTestUser(t, s)
+	e := registerWorkMemoTestRoutes(t, s, user)
+
+	createWorkMemoAuto(t, e, "2026-08-01", "a")
+	createWorkMemoAuto(t, e, "2026-08-01", "b")
+	createWorkMemoAuto(t, e, "2026-08-02", "c")
+	createWorkMemoAuto(t, e, "2026-08-21", "d")
+	createWorkMemoAuto(t, e, "2026-08-21", "e")
+	createWorkMemoAuto(t, e, "2026-08-21", "f")
+
+	days := workMemoCalendarDays(t, e, "2026-08")
+	want := map[string]int{"2026-08-01": 2, "2026-08-02": 1, "2026-08-21": 3}
+	if len(days) != len(want) {
+		t.Fatalf("expected %d dates, got %#v", len(want), days)
+	}
+	for date, count := range want {
+		if days[date] != count {
+			t.Fatalf("date %s count = %d, want %d", date, days[date], count)
+		}
+	}
+}
+
+func TestWorkMemoCalendarUserIsolation(t *testing.T) {
+	s := newTestStore(t)
+	userA := newTestUser(t, s)
+	userB := newTestUser(t, s)
+	eA := registerWorkMemoTestRoutes(t, s, userA)
+	eB := registerWorkMemoTestRoutes(t, s, userB)
+
+	createWorkMemoAuto(t, eA, "2026-08-01", "a1")
+	createWorkMemoAuto(t, eA, "2026-08-01", "a2")
+	createWorkMemoAuto(t, eA, "2026-08-02", "a3")
+	createWorkMemoAuto(t, eB, "2026-08-01", "b1")
+	createWorkMemoAuto(t, eB, "2026-08-01", "b2")
+	createWorkMemoAuto(t, eB, "2026-08-01", "b3")
+	createWorkMemoAuto(t, eB, "2026-08-01", "b4")
+
+	daysA := workMemoCalendarDays(t, eA, "2026-08")
+	wantA := map[string]int{"2026-08-01": 2, "2026-08-02": 1}
+	if len(daysA) != len(wantA) {
+		t.Fatalf("userA expected %d dates, got %#v", len(wantA), daysA)
+	}
+	for date, count := range wantA {
+		if daysA[date] != count {
+			t.Fatalf("userA date %s count = %d, want %d", date, daysA[date], count)
+		}
+	}
+
+	daysB := workMemoCalendarDays(t, eB, "2026-08")
+	if daysB["2026-08-01"] != 4 {
+		t.Fatalf("userB 2026-08-01 count = %d, want 4", daysB["2026-08-01"])
+	}
+	if len(daysB) != 1 {
+		t.Fatalf("userB expected exactly 1 date, got %#v", daysB)
+	}
+}
+
+func TestWorkMemoCalendarMonthIsolation(t *testing.T) {
+	s := newTestStore(t)
+	user := newTestUser(t, s)
+	e := registerWorkMemoTestRoutes(t, s, user)
+
+	createWorkMemoAuto(t, e, "2026-07-31", "prev month")
+	createWorkMemoAuto(t, e, "2026-08-01", "a")
+	createWorkMemoAuto(t, e, "2026-08-01", "b")
+	createWorkMemoAuto(t, e, "2026-08-31", "c")
+	createWorkMemoAuto(t, e, "2026-08-31", "d")
+	createWorkMemoAuto(t, e, "2026-08-31", "e")
+	createWorkMemoAuto(t, e, "2026-09-01", "next month")
+
+	days := workMemoCalendarDays(t, e, "2026-08")
+	want := map[string]int{"2026-08-01": 2, "2026-08-31": 3}
+	if len(days) != len(want) {
+		t.Fatalf("expected %d dates, got %#v", len(want), days)
+	}
+	for date, count := range want {
+		if days[date] != count {
+			t.Fatalf("date %s count = %d, want %d", date, days[date], count)
+		}
+	}
+}
+
+func TestWorkMemoCalendarEmptyMonth(t *testing.T) {
+	s := newTestStore(t)
+	user := newTestUser(t, s)
+	e := registerWorkMemoTestRoutes(t, s, user)
+
+	payload := workMemoCalendar(t, e, "2026-08")
+	days, ok := payload["days"].([]any)
+	if !ok {
+		t.Fatalf("days is not an array: %#v", payload["days"])
+	}
+	if len(days) != 0 {
+		t.Fatalf("expected empty days array, got %#v", days)
+	}
+	if payload["month"] != "2026-08" {
+		t.Fatalf("month = %q, want 2026-08", payload["month"])
+	}
+}
+
+func TestWorkMemoCalendarMissingMonth(t *testing.T) {
+	s := newTestStore(t)
+	user := newTestUser(t, s)
+	e := registerWorkMemoTestRoutes(t, s, user)
+
+	rec := performRequest(t, e, http.MethodGet, "/api/v1/work-memos/calendar", nil, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing month status = %d, want 400 body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestWorkMemoCalendarInvalidMonth(t *testing.T) {
+	s := newTestStore(t)
+	user := newTestUser(t, s)
+	e := registerWorkMemoTestRoutes(t, s, user)
+
+	for _, month := range []string{"2026-8", "2026-13", "abc", "2026", "2026-08-01", "2026/08"} {
+		rec := performRequest(t, e, http.MethodGet, "/api/v1/work-memos/calendar?month="+month, nil, nil)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("month %q status = %d, want 400 body=%s", month, rec.Code, rec.Body.String())
+		}
+	}
+}
