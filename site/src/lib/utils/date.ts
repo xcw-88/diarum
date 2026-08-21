@@ -74,6 +74,37 @@ export function getDayOfWeek(dateStr: string): string {
 }
 
 /**
+ * Format date for the Worklog editor header (e.g., "8月21日 周五" / "Aug 21, Fri").
+ */
+export function formatWorklogHeaderDate(dateStr: string): string {
+	const date = parseDate(dateStr);
+	const month = date.getMonth() + 1;
+	const day = date.getDate();
+	const weekday = date.toLocaleDateString(getIntlLocale(), { weekday: 'short' });
+	const locale = getIntlLocale();
+	if (locale.startsWith('zh')) {
+		return `${month}月${day}日 ${weekday}`;
+	}
+	return date.toLocaleDateString(locale, { month: 'short', day: 'numeric', weekday: 'short' });
+}
+
+/**
+ * Validate a date string is exactly YYYY-MM-DD and denotes a real calendar date.
+ */
+export function isValidDate(dateStr: string): boolean {
+	if (!dateStr || typeof dateStr !== 'string') return false;
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false;
+	const [year, month, day] = dateStr.split('-').map((part) => parseInt(part, 10));
+	const parsed = new Date(dateStr + 'T00:00:00');
+	return (
+		!Number.isNaN(parsed.getTime()) &&
+		parsed.getFullYear() === year &&
+		parsed.getMonth() === month - 1 &&
+		parsed.getDate() === day
+	);
+}
+
+/**
  * Check if date is today
  */
 export function isToday(dateStr: string): boolean {

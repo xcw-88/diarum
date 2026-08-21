@@ -10,7 +10,8 @@ export const zh = {
 		copy: '复制',
 		copied: '已复制！',
 		add: '添加',
-		today: '今天'
+		today: '今天',
+		retry: '重试'
 	},
 	nav: {
 		home: 'Diarum 首页',
@@ -264,6 +265,35 @@ export const zh = {
 			visualStyleWin95: 'Windows 95',
 			visualStyleWin95Desc: '复古桌面与记事本界面'
 		}
+	},
+	worklog: {
+		pageTitle: '工作随记',
+		emptyState: '今天还没有工作随记，点击 + 记一条。',
+		addMemo: '记一条',
+		editTitle: '编辑随记',
+		newTitle: '新增随记',
+		editorPlaceholder: '在此输入工作随记…',
+		editorEmptyPrompt: '在此输入工作随记…',
+		statusNormal: '普通',
+		statusPending: '待处理',
+		statusCompleted: '已完成',
+		statusLabel: '状态',
+		pin: '置顶',
+		pinned: '已置顶',
+		unpin: '取消置顶',
+		more: '更多',
+		back: '返回',
+		delete: '删除',
+		deleteConfirmTitle: '删除这条随记？',
+		deleteConfirmBody: '删除后无法恢复。',
+		deleteFailed: '删除失败，请重试。',
+		saveFailed: '保存失败，请重试。',
+		saveFailedShort: '保存失败',
+		saving: '保存中…',
+		saved: '已保存',
+		discardChangesConfirm: '有未保存的修改，确定放弃吗？',
+		editMemo: '编辑随记',
+		emptyContent: '无内容'
 	},
 	win95: {
 		contentsTitle: '日记目录',

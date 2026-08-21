@@ -26,9 +26,12 @@
 	export let content = '';
 	export let onChange: (value: string) => void = () => {};
 	export let placeholder = 'Start writing...';
+	export let commandPlaceholder = 'Type / to browse options';
 	export let diaryDate: string | undefined = undefined;
 	export let selectedContent: string = '';
 	export let emptyStatePrompt: string = '';
+	export let emptyStateAlignTop = false;
+	export let allowImages = true;
 
 	let editorElement: HTMLDivElement;
 	let editor: Editor | null = null;
@@ -111,37 +114,39 @@
 		}
 	}
 
-	// Handle paste event
-	function handlePaste(view: any, event: ClipboardEvent) {
-		const items = event.clipboardData?.items;
-		if (!items) return false;
+// Handle paste event
+function handlePaste(view: any, event: ClipboardEvent) {
+	if (!allowImages) return false;
+	const items = event.clipboardData?.items;
+	if (!items) return false;
 
-		for (const item of items) {
-			if (item.type.startsWith('image/')) {
-				event.preventDefault();
-				const file = item.getAsFile();
-				if (file) {
-					handleImageUploadWithPlaceholder(file);
-				}
-				return true;
-			}
-		}
-		return false;
-	}
-
-	// Handle drop event
-	function handleDrop(view: any, event: DragEvent) {
-		const files = event.dataTransfer?.files;
-		if (!files || files.length === 0) return false;
-
-		const file = files[0];
-		if (file.type.startsWith('image/')) {
+	for (const item of items) {
+		if (item.type.startsWith('image/')) {
 			event.preventDefault();
-			handleImageUploadWithPlaceholder(file);
+			const file = item.getAsFile();
+			if (file) {
+				handleImageUploadWithPlaceholder(file);
+			}
 			return true;
 		}
-		return false;
 	}
+	return false;
+}
+
+// Handle drop event
+function handleDrop(view: any, event: DragEvent) {
+	if (!allowImages) return false;
+	const files = event.dataTransfer?.files;
+	if (!files || files.length === 0) return false;
+
+	const file = files[0];
+	if (file.type.startsWith('image/')) {
+		event.preventDefault();
+		handleImageUploadWithPlaceholder(file);
+		return true;
+	}
+	return false;
+}
 
 	// Handle slash command image trigger
 	function handleSlashImage() {
@@ -174,14 +179,15 @@
 		}
 	}
 
-	function handleFileSelect(event: Event) {
-		const input = event.target as HTMLInputElement;
-		const file = input.files?.[0];
-		if (file) {
-			handleImageUploadWithPlaceholder(file);
-			input.value = '';
-		}
+function handleFileSelect(event: Event) {
+	if (!allowImages) return;
+	const input = event.target as HTMLInputElement;
+	const file = input.files?.[0];
+	if (file) {
+		handleImageUploadWithPlaceholder(file);
+		input.value = '';
 	}
+}
 
 	// Get HTML of current selection
 	function getSelectionHtml(): string {
@@ -228,10 +234,12 @@
 	}
 
 	onMount(() => {
-		// Register image upload trigger for slash commands
-		setImageUploadTrigger(handleSlashImage);
-		// Register gallery picker trigger for slash commands
-		setGalleryPickerTrigger(handleGalleryPicker);
+		if (allowImages) {
+			// Register image upload trigger for slash commands
+			setImageUploadTrigger(handleSlashImage);
+			// Register gallery picker trigger for slash commands
+			setGalleryPickerTrigger(handleGalleryPicker);
+		}
 
 		editor = new Editor({
 			element: editorElement,
@@ -242,7 +250,7 @@
 				Placeholder.configure({
 					placeholder: ({ node }) => {
 						if (node.type.name === 'paragraph') {
-							return 'Type / to browse options';
+							return commandPlaceholder;
 						}
 						return placeholder;
 					},
@@ -342,6 +350,7 @@
 		<button
 			type="button"
 			class="empty-state-overlay"
+			class:align-top={emptyStateAlignTop}
 			on:click={() => editor?.commands.focus()}
 			aria-label="Focus editor"
 		>
@@ -450,5 +459,11 @@
 		padding: 0;
 		cursor: text;
 		pointer-events: auto;
+	}
+
+	.empty-state-overlay.align-top {
+		align-items: flex-start;
+		justify-content: flex-start;
+		padding: 1rem;
 	}
 </style>

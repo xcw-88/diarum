@@ -11,7 +11,8 @@ export const en = {
 		copy: 'Copy',
 		copied: 'Copied!',
 		add: 'Add',
-		today: 'Today'
+		today: 'Today',
+		retry: 'Retry'
 	},
 	nav: {
 		home: 'Diarum Home',
@@ -274,6 +275,35 @@ export const en = {
 			visualStyleWin95: 'Windows 95',
 			visualStyleWin95Desc: 'Retro desktop & Notepad skin'
 		}
+	},
+	worklog: {
+		pageTitle: 'Worklog',
+		emptyState: 'No work memos yet. Tap + to add one.',
+		addMemo: 'Add memo',
+		editTitle: 'Edit memo',
+		newTitle: 'New memo',
+		editorPlaceholder: 'What are you working on?',
+		editorEmptyPrompt: 'Type your work note here...',
+		statusNormal: 'Normal',
+		statusPending: 'Pending',
+		statusCompleted: 'Completed',
+		statusLabel: 'Status',
+		pin: 'Pin',
+		pinned: 'Pinned',
+		unpin: 'Unpin',
+		more: 'More',
+		back: 'Back',
+		delete: 'Delete',
+		deleteConfirmTitle: 'Delete this memo?',
+		deleteConfirmBody: 'This action cannot be undone.',
+		deleteFailed: 'Failed to delete memo. Please try again.',
+		saveFailed: 'Failed to save memo. Please try again.',
+		saveFailedShort: 'Save failed',
+		saving: 'Saving...',
+		saved: 'Saved',
+		discardChangesConfirm: 'You have unsaved changes. Discard them?',
+		editMemo: 'Edit memo',
+		emptyContent: 'No content'
 	},
 	win95: {
 		contentsTitle: 'Diary Contents',
