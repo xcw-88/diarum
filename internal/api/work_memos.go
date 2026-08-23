@@ -23,6 +23,8 @@ func RegisterWorkMemoRoutes(e *echo.Echo, s *store.Store, authMiddleware echo.Mi
 	group.GET("/:id", getWorkMemoHandler(s))
 	group.PUT("/:id", updateWorkMemoHandler(s))
 	group.DELETE("/:id", deleteWorkMemoHandler(s))
+
+	RegisterWorkMemoMediaRoutes(group, s)
 }
 
 // optionalString unmarshals a JSON value and records whether the field was
