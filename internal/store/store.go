@@ -331,6 +331,19 @@ func createSchema(db *sql.DB) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_work_memos_owner_date_position ON work_memos(owner, date, position)`,
 		`CREATE INDEX IF NOT EXISTS idx_work_memos_owner_updated ON work_memos(owner, updated)`,
+		`CREATE TABLE IF NOT EXISTS work_memo_media (
+			created TEXT NOT NULL,
+			id TEXT PRIMARY KEY NOT NULL,
+			media_id TEXT NOT NULL,
+			memo_id TEXT NOT NULL,
+			owner TEXT NOT NULL,
+			position INTEGER DEFAULT 0 NOT NULL,
+			UNIQUE(memo_id, media_id),
+			FOREIGN KEY(owner) REFERENCES users(id) ON DELETE CASCADE,
+			FOREIGN KEY(memo_id) REFERENCES work_memos(id) ON DELETE CASCADE,
+			FOREIGN KEY(media_id) REFERENCES media(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_work_memo_media_owner_memo_position ON work_memo_media(owner, memo_id, position)`,
 		`INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, datetime('now'))`,
 	}
 	for _, statement := range statements {
