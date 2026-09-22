@@ -1,5 +1,4 @@
 import { Node, mergeAttributes } from '@tiptap/core';
-import { Plugin, PluginKey } from '@tiptap/pm/state';
 
 export interface ImageOptions {
 	inline: boolean;
@@ -10,10 +9,10 @@ export interface ImageOptions {
 declare module '@tiptap/core' {
 	interface Commands<ReturnType> {
 		customImage: {
-			setImage: (options: { src: string; alt?: string; title?: string }) => ReturnType;
+			setImage: (options: { src: string; alt?: string; title?: string; mediaId?: string }) => ReturnType;
 			setImagePlaceholder: (options: { id: string; file?: File }) => ReturnType;
 			removePlaceholder: (id: string) => ReturnType;
-			replacePlaceholderWithImage: (options: { id: string; src: string; alt?: string }) => ReturnType;
+			replacePlaceholderWithImage: (options: { id: string; src: string; alt?: string; mediaId?: string }) => ReturnType;
 		};
 	}
 }
@@ -54,6 +53,9 @@ export const ImageExtension = Node.create<ImageOptions>({
 				default: null,
 			},
 			'data-placeholder-id': {
+				default: null,
+			},
+			'data-media-id': {
 				default: null,
 			},
 		};
@@ -160,6 +162,15 @@ export const ImageExtension = Node.create<ImageOptions>({
 						img.removeAttribute('data-uploading');
 						img.removeAttribute('data-placeholder-id');
 
+						// Sync the committed Diarum media id onto the live DOM
+						// image so it matches the serialized node attributes.
+						const committedMediaId = updatedNode.attrs['data-media-id'];
+						if (committedMediaId) {
+							img.setAttribute('data-media-id', String(committedMediaId));
+						} else {
+							img.removeAttribute('data-media-id');
+						}
+
 						// Reset image styles and add loading placeholder
 						img.style.opacity = '0';
 						img.style.filter = '';
@@ -204,9 +215,15 @@ export const ImageExtension = Node.create<ImageOptions>({
 			setImage:
 				(options) =>
 				({ commands }) => {
+					const attrs: Record<string, unknown> = {
+						src: options.src,
+						alt: options.alt ?? null,
+						title: options.title ?? null,
+						'data-media-id': options.mediaId ?? null,
+					};
 					return commands.insertContent({
 						type: this.name,
-						attrs: options,
+						attrs,
 					});
 				},
 
@@ -237,6 +254,9 @@ export const ImageExtension = Node.create<ImageOptions>({
 					doc.descendants((node, pos) => {
 						if (node.type.name === this.name && node.attrs['data-placeholder-id'] === id) {
 							if (dispatch) {
+								if (typeof node.attrs.src === 'string' && node.attrs.src.startsWith('blob:')) {
+									URL.revokeObjectURL(node.attrs.src);
+								}
 								tr.delete(pos, pos + node.nodeSize);
 							}
 							found = true;
@@ -256,12 +276,16 @@ export const ImageExtension = Node.create<ImageOptions>({
 					doc.descendants((node, pos) => {
 						if (node.type.name === this.name && node.attrs['data-placeholder-id'] === options.id) {
 							if (dispatch) {
+								if (typeof node.attrs.src === 'string' && node.attrs.src.startsWith('blob:')) {
+									URL.revokeObjectURL(node.attrs.src);
+								}
 								const newAttrs = {
 									...node.attrs,
 									src: options.src,
 									alt: options.alt || '',
 									'data-uploading': null,
 									'data-placeholder-id': null,
+									'data-media-id': options.mediaId ?? null,
 								};
 								tr.setNodeMarkup(pos, undefined, newAttrs);
 							}

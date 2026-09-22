@@ -16,6 +16,7 @@
 	import { common, createLowlight } from 'lowlight';
 	import { DOMSerializer } from '@tiptap/pm/model';
 	import { uploadImage, getMediaUrl, isCheveretoResult } from '$lib/utils/uploadImage';
+	import { extractCommittableMediaId } from '$lib/components/worklog/workMemoMediaAssociation';
 	import { SlashCommands } from './SlashCommands';
 	import { getSuggestionItems, setImageUploadTrigger, setGalleryPickerTrigger } from './commands';
 	import { suggestionRenderer, showCommandMenu } from './suggestionRenderer';
@@ -32,11 +33,21 @@
 	export let emptyStatePrompt: string = '';
 	export let emptyStateAlignTop = false;
 	export let allowImages = true;
+	export let showImageActions = false;
+	export let uploadImageLabel = 'Add image';
+	export let chooseFromGalleryLabel = 'Choose from library';
+	export let onImageUploadStateChange: (state: { pending: number; error: string | null }) => void = () => {};
+	// When false, selecting an image from the media library will NOT associate
+	// the media with the current Diary. Work Memo editors pass false; the Diary
+	// editor keeps the default (true) to preserve original behavior.
+	export let associateWithDiary = true;
 
 	let editorElement: HTMLDivElement;
 	let editor: Editor | null = null;
 	let fileInput: HTMLInputElement;
 	let uploadError = '';
+	let uploadErrorTimer: ReturnType<typeof setTimeout> | undefined;
+	let pendingImageUploads = 0;
 	let showMediaPicker = false;
 	let isFocused = false;
 
@@ -51,6 +62,16 @@
 		maxSize: 50 * 1024 * 1024, // 50MB
 		allowedTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
 	};
+
+	function showUploadError(message: string) {
+		uploadError = message;
+		if (uploadErrorTimer) clearTimeout(uploadErrorTimer);
+		uploadErrorTimer = setTimeout(() => (uploadError = ''), 3000);
+	}
+
+	function publishImageUploadState(error: string | null = null) {
+		onImageUploadStateChange({ pending: pendingImageUploads, error });
+	}
 
 	// Validate image file
 	function validateImageFile(file: File): string | null {
@@ -71,13 +92,12 @@
 
 	// Handle image upload with placeholder
 	async function handleImageUploadWithPlaceholder(file: File): Promise<void> {
-		if (!editor) return;
+		if (!editor || editor.isDestroyed) return;
 
 		// Validate file
 		const validationError = validateImageFile(file);
 		if (validationError) {
-			uploadError = validationError;
-			setTimeout(() => (uploadError = ''), 3000);
+			showUploadError(validationError);
 			return;
 		}
 
@@ -87,6 +107,9 @@
 		editor.chain().focus().setImagePlaceholder({ id: placeholderId, file }).run();
 
 		uploadError = '';
+		pendingImageUploads += 1;
+		publishImageUploadState();
+		let failureMessage: string | null = null;
 
 		try {
 			const result = await uploadImage(file, { diaryDate });
@@ -98,19 +121,30 @@
 				url = getMediaUrl(result);
 			}
 
-			// Replace placeholder with actual image
-			editor.commands.replacePlaceholderWithImage({
+			// Replace placeholder with the durable URL before allowing navigation
+			// or Worklog autosave to continue.
+			if (!editor || editor.isDestroyed) return;
+			const committedMediaId = extractCommittableMediaId(result);
+			const replaced = editor.commands.replacePlaceholderWithImage({
 				id: placeholderId,
 				src: url,
 				alt: file.name,
+				mediaId: committedMediaId ?? undefined,
 			});
+			// The user may delete the placeholder while the upload is in flight.
+			// In that case the durable upload is intentionally left unattached and
+			// must not be reinserted into the document.
+			if (!replaced) return;
 		} catch (error) {
 			console.error('Image upload failed:', error);
-			uploadError = 'Image upload failed, please try again';
-			setTimeout(() => (uploadError = ''), 3000);
+			failureMessage = 'Image upload failed, please try again';
+			showUploadError(failureMessage);
 
 			// Remove placeholder on error
-			editor.commands.removePlaceholder(placeholderId);
+			if (editor && !editor.isDestroyed) editor.commands.removePlaceholder(placeholderId);
+		} finally {
+			pendingImageUploads = Math.max(0, pendingImageUploads - 1);
+			publishImageUploadState(failureMessage);
 		}
 	}
 
@@ -120,17 +154,17 @@ function handlePaste(view: any, event: ClipboardEvent) {
 	const items = event.clipboardData?.items;
 	if (!items) return false;
 
+	const files: File[] = [];
 	for (const item of items) {
 		if (item.type.startsWith('image/')) {
-			event.preventDefault();
 			const file = item.getAsFile();
-			if (file) {
-				handleImageUploadWithPlaceholder(file);
-			}
-			return true;
+			if (file) files.push(file);
 		}
 	}
-	return false;
+	if (files.length === 0) return false;
+	event.preventDefault();
+	for (const file of files) void handleImageUploadWithPlaceholder(file);
+	return true;
 }
 
 // Handle drop event
@@ -139,13 +173,11 @@ function handleDrop(view: any, event: DragEvent) {
 	const files = event.dataTransfer?.files;
 	if (!files || files.length === 0) return false;
 
-	const file = files[0];
-	if (file.type.startsWith('image/')) {
-		event.preventDefault();
-		handleImageUploadWithPlaceholder(file);
-		return true;
-	}
-	return false;
+	const imageFiles = Array.from(files).filter((file) => file.type.startsWith('image/'));
+	if (imageFiles.length === 0) return false;
+	event.preventDefault();
+	for (const file of imageFiles) void handleImageUploadWithPlaceholder(file);
+	return true;
 }
 
 	// Handle slash command image trigger
@@ -163,10 +195,12 @@ function handleDrop(view: any, event: DragEvent) {
 		if (!editor) return;
 
 		const url = getMediaFileUrl(media);
-		editor.chain().focus().setImage({ src: url }).run();
+		const committedMediaId = extractCommittableMediaId(media);
+		editor.chain().focus().setImage({ src: url, mediaId: committedMediaId ?? undefined }).run();
 
-		// Associate media with current diary
-		if (diaryDate && media.id) {
+		// Associate media with the current Diary only when explicitly enabled.
+		// Work Memo editors opt out so picking an image never links it to a Diary.
+		if (associateWithDiary && diaryDate && media.id) {
 			try {
 				const { getOrCreateDiaryId } = await import('$lib/utils/uploadImage');
 				const diaryId = await getOrCreateDiaryId(diaryDate);
@@ -182,11 +216,9 @@ function handleDrop(view: any, event: DragEvent) {
 function handleFileSelect(event: Event) {
 	if (!allowImages) return;
 	const input = event.target as HTMLInputElement;
-	const file = input.files?.[0];
-	if (file) {
-		handleImageUploadWithPlaceholder(file);
-		input.value = '';
-	}
+	const files = Array.from(input.files ?? []);
+	for (const file of files) void handleImageUploadWithPlaceholder(file);
+	input.value = '';
 }
 
 	// Get HTML of current selection
@@ -332,6 +364,7 @@ function handleFileSelect(event: Event) {
 		setImageUploadTrigger(null);
 		// Cleanup gallery picker trigger
 		setGalleryPickerTrigger(null);
+		if (uploadErrorTimer) clearTimeout(uploadErrorTimer);
 		editor?.destroy();
 	});
 
@@ -373,10 +406,31 @@ function handleFileSelect(event: Event) {
 	<input
 		type="file"
 		accept="image/*"
+		multiple
 		bind:this={fileInput}
 		on:change={handleFileSelect}
 		style="display: none;"
 	/>
+	{#if allowImages && showImageActions}
+		<div class="image-actions" aria-label={uploadImageLabel}>
+			<button type="button" class="image-action" on:click={handleSlashImage} aria-label={uploadImageLabel} title={uploadImageLabel}>
+				<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+					<rect x="3" y="3" width="18" height="18" rx="2" />
+					<circle cx="8.5" cy="8.5" r="1.5" />
+					<path d="m21 15-5-5L5 21" />
+				</svg>
+				<span>{uploadImageLabel}</span>
+			</button>
+			<button type="button" class="image-action icon-only" on:click={handleGalleryPicker} aria-label={chooseFromGalleryLabel} title={chooseFromGalleryLabel}>
+				<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+					<path d="M18 22H4a2 2 0 0 1-2-2V6" />
+					<rect x="6" y="2" width="16" height="16" rx="2" />
+					<circle cx="12" cy="8" r="2" />
+					<path d="m22 13-2.5-2.5a2 2 0 0 0-2.83 0L12 15" />
+				</svg>
+			</button>
+		</div>
+	{/if}
 	{#if uploadError}
 		<div class="upload-error">{uploadError}</div>
 	{/if}
@@ -434,6 +488,48 @@ function handleFileSelect(event: Event) {
 		font-size: 14px;
 		z-index: 1000;
 		animation: slideIn 0.2s ease;
+	}
+
+	.image-actions {
+		position: sticky;
+		bottom: 0.75rem;
+		display: flex;
+		justify-content: flex-end;
+		gap: 0.5rem;
+		padding: 0 1rem 0.75rem;
+		pointer-events: none;
+		z-index: 10;
+	}
+
+	.image-action {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.4rem;
+		height: 2.5rem;
+		padding: 0 0.85rem;
+		border: 1px solid hsl(var(--border));
+		border-radius: 9999px;
+		background: hsl(var(--card));
+		color: hsl(var(--foreground));
+		box-shadow: 0 4px 14px hsl(var(--foreground) / 0.1);
+		font-size: 0.8rem;
+		font-weight: 500;
+		pointer-events: auto;
+	}
+
+	.image-action:hover {
+		background: hsl(var(--muted));
+	}
+
+	.image-action.icon-only {
+		width: 2.5rem;
+		padding: 0;
+	}
+
+	.image-action svg {
+		width: 1rem;
+		height: 1rem;
 	}
 
 	@keyframes slideIn {
