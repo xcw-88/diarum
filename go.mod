@@ -13,6 +13,7 @@ require (
 	github.com/labstack/echo/v5 v5.0.0-20230722203903-ec5b858dab61
 	github.com/philippgille/chromem-go v0.7.0
 	golang.org/x/crypto v0.36.0
+	golang.org/x/net v0.37.0
 	modernc.org/sqlite v1.36.1
 )
 
@@ -40,7 +41,6 @@ require (
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	golang.org/x/exp v0.0.0-20250305212735-054e65f0b394 // indirect
-	golang.org/x/net v0.37.0 // indirect
 	golang.org/x/sys v0.31.0 // indirect
 	golang.org/x/time v0.6.0 // indirect
 	modernc.org/libc v1.61.13 // indirect

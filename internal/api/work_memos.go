@@ -19,6 +19,9 @@ func RegisterWorkMemoRoutes(e *echo.Echo, s *store.Store, authMiddleware echo.Mi
 	group.POST("", createWorkMemoHandler(s))
 	group.GET("/calendar", workMemoCalendarHandler(s))
 	group.GET("/by-date/:date", listWorkMemosByDateHandler(s))
+	// Read-only search. Registered with the other static paths, ahead of /:id,
+	// so "search" is never captured as a memo id.
+	registerWorkMemoSearchRoute(group, s)
 	group.POST("/reorder", reorderWorkMemosHandler(s))
 	group.GET("/:id", getWorkMemoHandler(s))
 	group.PUT("/:id", updateWorkMemoHandler(s))

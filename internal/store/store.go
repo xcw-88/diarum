@@ -184,6 +184,13 @@ func Open(dataDir string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	// Work Memo search derives search_text from content. New databases get the
+	// column from createSchema; this call adds it to databases created before
+	// search existed and backfills the rows.
+	if err := ensureWorkMemoSearchText(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 
 	mediaCollectionID, _ := getMeta(db, "legacy.media_collection_id")
 	if mediaCollectionID == "" {
@@ -324,6 +331,7 @@ func createSchema(db *sql.DB) error {
 			is_pinned INTEGER DEFAULT 0 NOT NULL,
 			owner TEXT NOT NULL,
 			position INTEGER DEFAULT 0 NOT NULL,
+			search_text TEXT DEFAULT '' NOT NULL,
 			status TEXT DEFAULT 'normal' NOT NULL CHECK(status IN ('normal', 'pending', 'completed')),
 			tags JSON DEFAULT '[]' NOT NULL,
 			updated TEXT NOT NULL,

@@ -137,10 +137,14 @@ func (s *Store) CreateWorkMemo(owner string, input CreateWorkMemoInput) (*WorkMe
 	}
 	now := nowString()
 
+	// search_text is derived here, at the persistence boundary, so a client can
+	// never submit it: CreateWorkMemoInput has no such field, and the HTTP body
+	// decodes into a separate struct that does not accept one either.
 	_, err = s.DB.Exec(
-		`INSERT INTO work_memos(id, owner, date, content, status, is_pinned, position, tags, created, updated)
-		VALUES(?, ?, ?, ?, ?, ?, COALESCE((SELECT MAX(position) + 1 FROM work_memos WHERE owner = ? AND date = ?), 0), ?, ?, ?)`,
-		id, owner, fullDate, input.Content, status, boolToInt(input.IsPinned), owner, fullDate, encodeJSON(tags), now, now,
+		`INSERT INTO work_memos(id, owner, date, content, status, is_pinned, position, tags, search_text, created, updated)
+		VALUES(?, ?, ?, ?, ?, ?, COALESCE((SELECT MAX(position) + 1 FROM work_memos WHERE owner = ? AND date = ?), 0), ?, ?, ?, ?)`,
+		id, owner, fullDate, input.Content, status, boolToInt(input.IsPinned), owner, fullDate, encodeJSON(tags),
+		extractWorkMemoSearchText(input.Content), now, now,
 	)
 	if err != nil {
 		return nil, err
@@ -231,6 +235,11 @@ func (s *Store) UpdateWorkMemo(owner, id string, input UpdateWorkMemoInput) (*Wo
 	if input.Content != nil {
 		setParts = append(setParts, "content = ?")
 		args = append(args, *input.Content)
+		// search_text is a derived column: whenever the body changes, its
+		// searchable plain text is regenerated in the same statement. A client
+		// cannot send search_text, and UpdateWorkMemoInput does not carry it.
+		setParts = append(setParts, "search_text = ?")
+		args = append(args, extractWorkMemoSearchText(*input.Content))
 	}
 	if input.Status != nil {
 		if !IsValidWorkMemoStatus(*input.Status) {
