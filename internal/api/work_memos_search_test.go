@@ -137,6 +137,45 @@ func TestWorkMemoSearchResponseShape(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// private cache boundary
+// ---------------------------------------------------------------------------
+
+// TestWorkMemoSearchResponseIsPrivateAndUncacheable pins the cache contract of
+// the search endpoint. A search response carries private snippets, and a cache
+// entry is keyed by URL rather than by the bearer token that asked for it, so
+// any cacheable search response lets a second account on the same browser read
+// the first account's hits for an identical `/search?q=...` URL.
+func TestWorkMemoSearchResponseIsPrivateAndUncacheable(t *testing.T) {
+	s := newTestStore(t)
+	user := newTestUser(t, s)
+	e := registerWorkMemoTestRoutes(t, s, user)
+
+	createWorkMemoAuto(t, e, "2026-08-21", "<p>secret body</p>")
+
+	rec := performRequest(t, e, http.MethodGet, workMemoSearchPath+"?q=secret", nil, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get(echo.HeaderCacheControl); got != "private, no-store" {
+		t.Fatalf("Cache-Control = %q, want %q", got, "private, no-store")
+	}
+	if got := rec.Header().Get(echo.HeaderVary); got != echo.HeaderAuthorization {
+		t.Fatalf("Vary = %q, want %q", got, echo.HeaderAuthorization)
+	}
+
+	// A rejected search is user-specific too (it is rejected *because* of the
+	// account's own filter combination), so it must not become cacheable
+	// either - the handler sets the header before parsing or writing anything.
+	rec = performRequest(t, e, http.MethodGet, workMemoSearchPath, nil, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s, want 400", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get(echo.HeaderCacheControl); got != "private, no-store" {
+		t.Fatalf("error Cache-Control = %q, want %q", got, "private, no-store")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // validation (task items 17, 18, 20, 24, 26)
 // ---------------------------------------------------------------------------
 

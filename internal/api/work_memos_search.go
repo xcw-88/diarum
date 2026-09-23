@@ -41,6 +41,24 @@ func registerWorkMemoSearchRoute(group *echo.Group, s *store.Store) {
 // rejected, which keeps it from becoming a second timeline endpoint.
 func searchWorkMemosHandler(s *store.Store) echo.HandlerFunc {
 	return func(c echo.Context) error {
+		// A search response is authenticated, user-private data: it may only
+		// ever be served back to the account that asked for it. `private` keeps
+		// shared and intermediary caches out, and `no-store` forbids every
+		// cache layer - the browser HTTP cache, the disk cache and a service
+		// worker's Cache Storage - from keeping a copy. This matters because a
+		// cache entry is keyed by URL, not by credentials: without `no-store`,
+		// a second account signing in on the same browser could be handed the
+		// previous account's hits (via the PWA `api-cache`, or offline) for the
+		// very same `/search?q=...` URL.
+		//
+		// The header is set before any parsing or writing, so the validation
+		// and server errors of this handler carry the same "never cache"
+		// contract instead of falling back to a cacheable 400/500.
+		c.Response().Header().Set(echo.HeaderCacheControl, "private, no-store")
+		// A complement, not a substitute: a cache that ignored `private` still
+		// cannot reuse this response for a request carrying another token.
+		c.Response().Header().Set(echo.HeaderVary, echo.HeaderAuthorization)
+
 		// The owner comes exclusively from the authenticated request context.
 		// There is no owner query parameter and no owner field anywhere in the
 		// request, so a caller cannot widen the search to another user.

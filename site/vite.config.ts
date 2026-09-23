@@ -125,6 +125,26 @@ export default defineConfig({
 						}
 					},
 					{
+						// Worklog search responses are authenticated, user-private
+						// data, so they must never be written to Cache Storage: a
+						// cache entry is keyed by URL and does not vary with the
+						// Bearer token, so the generic `api-cache` below could
+						// hand one account the previous account's search snippets
+						// for the same `/search?q=...` URL while offline or after
+						// a NetworkFirst timeout. This rule is declared *before*
+						// the generic `/api/` rule on purpose - Workbox uses
+						// first-match semantics, so a later rule can never
+						// override an earlier one. `cache: 'no-store'` keeps the
+						// browser HTTP cache out of the picture too; the backend
+						// sends `Cache-Control: private, no-store` as well, so
+						// the boundary holds even if this rule is dropped.
+						urlPattern: /\/api\/v1\/work-memos\/search(\?|$)/i,
+						handler: 'NetworkOnly',
+						options: {
+							fetchOptions: { cache: 'no-store' }
+						}
+					},
+					{
 						urlPattern: /\/api\/.*/i,
 						handler: 'NetworkFirst',
 						options: {
