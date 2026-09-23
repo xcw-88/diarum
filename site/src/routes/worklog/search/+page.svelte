@@ -7,6 +7,7 @@
 	import { WorkMemoApiError } from '$lib/api/workMemos';
 	import { searchWorkMemos } from '$lib/api/workMemoSearch';
 	import {
+		WORK_MEMO_SEARCH_DEFAULT_SORT,
 		WORK_MEMO_SEARCH_PATH,
 		buildWorkMemoEditPath,
 		buildWorkMemoSearchUrl,
@@ -54,6 +55,25 @@
 	let canSubmit = $derived(
 		hasWorkMemoSearchCriteria(pendingState) && isWorkMemoSearchDateRangeValid(pendingState)
 	);
+
+	/** The sort is only worth restating in the summary when it is not the default. */
+	let nonDefaultSort = $derived(searchState.sort !== WORK_MEMO_SEARCH_DEFAULT_SORT);
+
+	/**
+	 * Localized labels for the committed-filter summary.
+	 *
+	 * The summary describes the *committed* search (the URL), never the draft, so
+	 * an edited-but-unsubmitted form can never misrepresent what is on screen.
+	 */
+	function statusText(status: string): string {
+		if (status === 'pending') return $t('worklog.statusPending');
+		if (status === 'completed') return $t('worklog.statusCompleted');
+		return $t('worklog.statusNormal');
+	}
+
+	function sortText(sort: string): string {
+		return sort === 'date_asc' ? $t('worklogSearch.sortDateAsc') : $t('worklogSearch.sortDateDesc');
+	}
 
 	// Abort avoids wasted work; the generation token makes correctness
 	// independent of whether the abort lands before the response is handled.
@@ -362,6 +382,37 @@
 		</form>
 
 		<section class="mt-6">
+			<!--
+				What the committed URL is actually searching for. Rendered from the
+				URL-backed state - never from the form draft - so the results below
+				can never be misread as belonging to a half-edited form.
+			-->
+			{#if criteriaPresent}
+				<div class="mb-3 rounded-xl border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+					<p class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+						<span class="font-medium text-foreground">{$t('worklogSearch.activeFilters')}</span>
+						{#if searchState.q}
+							<span class="min-w-0 break-words">{$t('worklogSearch.activeQuery', { value: searchState.q })}</span>
+						{/if}
+						{#if searchState.tag}
+							<span class="min-w-0 break-words">{$t('worklogSearch.activeTag', { value: searchState.tag })}</span>
+						{/if}
+						{#if searchState.status}
+							<span class="min-w-0 break-words">{$t('worklogSearch.activeStatus', { value: statusText(searchState.status) })}</span>
+						{/if}
+						{#if searchState.date_from}
+							<span class="min-w-0 break-words">{$t('worklogSearch.activeDateFrom', { value: searchState.date_from })}</span>
+						{/if}
+						{#if searchState.date_to}
+							<span class="min-w-0 break-words">{$t('worklogSearch.activeDateTo', { value: searchState.date_to })}</span>
+						{/if}
+						{#if nonDefaultSort}
+							<span class="min-w-0 break-words">{$t('worklogSearch.activeSort', { value: sortText(searchState.sort) })}</span>
+						{/if}
+					</p>
+				</div>
+			{/if}
+
 			{#if loading}
 				<div class="flex flex-col items-center justify-center gap-3 py-12">
 					<span class="h-6 w-6 animate-spin rounded-full border-2 border-primary/25 border-t-primary"></span>

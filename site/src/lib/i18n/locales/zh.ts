@@ -302,7 +302,9 @@ export const zh = {
 		backToCalendar: '返回工作随记日历',
 		calendarLoadFailed: '工作随记日历加载失败，请重试。',
 		calendarDayCount: '{date}，{count} 条随记',
-		calendarHint: '点击日期查看或新增工作随记。'
+		calendarHint: '点击日期查看或新增工作随记。',
+		search: '搜索',
+		searchMemos: '搜索工作随记'
 	},
 	worklogSearch: {
 		pageTitle: '搜索工作随记',
@@ -336,7 +338,14 @@ export const zh = {
 		previous: '上一页',
 		next: '下一页',
 		pageOf: '第 {page} / {total} 页',
-		openResult: '打开 {date} 的工作随记'
+		openResult: '打开 {date} 的工作随记',
+		activeFilters: '已生效的筛选',
+		activeQuery: '关键词：{value}',
+		activeTag: '标签：#{value}',
+		activeStatus: '状态：{value}',
+		activeDateFrom: '起始 {value}',
+		activeDateTo: '截止 {value}',
+		activeSort: '排序：{value}'
 	},
 	win95: {
 		contentsTitle: '日记目录',

@@ -312,7 +312,9 @@ export const en = {
 		backToCalendar: 'Back to worklog calendar',
 		calendarLoadFailed: 'Failed to load the worklog calendar. Please try again.',
 		calendarDayCount: '{date}, {count} memos',
-		calendarHint: 'Tap a date to view or add work memos.'
+		calendarHint: 'Tap a date to view or add work memos.',
+		search: 'Search',
+		searchMemos: 'Search work memos'
 	},
 	worklogSearch: {
 		pageTitle: 'Search worklog',
@@ -346,7 +348,14 @@ export const en = {
 		previous: 'Previous',
 		next: 'Next',
 		pageOf: 'Page {page} of {total}',
-		openResult: 'Open the work memo from {date}'
+		openResult: 'Open the work memo from {date}',
+		activeFilters: 'Active filters',
+		activeQuery: 'Keyword: {value}',
+		activeTag: 'Tag: #{value}',
+		activeStatus: 'Status: {value}',
+		activeDateFrom: 'From {value}',
+		activeDateTo: 'To {value}',
+		activeSort: 'Sort: {value}'
 	},
 	win95: {
 		contentsTitle: 'Diary Contents',

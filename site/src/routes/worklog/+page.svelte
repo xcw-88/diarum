@@ -95,7 +95,16 @@
 				<span class="hidden sm:inline">{$t('nav.home')}</span>
 			</a>
 			<h1 class="pointer-events-none absolute left-1/2 -translate-x-1/2 text-base font-semibold text-foreground">{$t('worklog.calendarTitle')}</h1>
-			<div class="w-9 sm:w-16" aria-hidden="true"></div>
+			<a
+				href="/worklog/search"
+				class="flex items-center gap-2 text-sm font-medium text-foreground transition-colors hover:text-primary"
+				aria-label={$t('worklog.searchMemos')}
+			>
+				<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+				</svg>
+				<span class="hidden sm:inline">{$t('worklog.search')}</span>
+			</a>
 		</div>
 	</header>
 

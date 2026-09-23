@@ -23,6 +23,7 @@ export type {
 export {
 	WORK_MEMO_SEARCH_PATH,
 	WORK_MEMO_SEARCH_PAGE_SIZE,
+	WORK_MEMO_SEARCH_DEFAULT_SORT,
 	buildWorkMemoEditPath,
 	buildWorkMemoSearchQueryString,
 	buildWorkMemoSearchUrl,
