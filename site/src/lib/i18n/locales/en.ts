@@ -139,7 +139,11 @@ export const en = {
 		legacyReadOnly: 'Your diary entry is read-only while an event is being edited.',
 		legacyEmpty: 'No diary entry for this day yet.',
 		editorPlaceholder: 'Write what happened...',
-		editorEmptyPrompt: 'What happened?'
+		editorEmptyPrompt: 'What happened?',
+		handoffFailed: 'Could not finish saving this event, so it is still open. Please try again.',
+		attachmentsFailed: 'The text was saved, but its images could not be linked. Please try again.',
+		uploadFailed: 'An image upload failed. Remove or retry it before leaving.',
+		leaveBlocked: 'Still saving. Please try again in a moment.'
 	},
 	search: {
 		pageTitle: 'Search',

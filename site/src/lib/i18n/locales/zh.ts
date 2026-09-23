@@ -129,7 +129,11 @@ export const zh = {
 		legacyReadOnly: '正在编辑事件，日记正文暂为只读。',
 		legacyEmpty: '这一天还没有日记正文。',
 		editorPlaceholder: '记录发生了什么…',
-		editorEmptyPrompt: '接下来发生了什么？'
+		editorEmptyPrompt: '接下来发生了什么？',
+		handoffFailed: '这条事件还未保存完成，已留在当前编辑状态，请重试。',
+		attachmentsFailed: '正文已保存，但图片关联未能写入，请重试。',
+		uploadFailed: '有图片上传失败，请先移除或重试再离开。',
+		leaveBlocked: '仍在保存中，请稍候重试。'
 	},
 	search: {
 		pageTitle: '搜索',

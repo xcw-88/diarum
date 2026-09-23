@@ -18,6 +18,7 @@
 	import type { SaveMachineState } from '../worklog/workMemoSaveMachine';
 	import { WorkMemoEditingSession } from '../worklog/workMemoEditingSession';
 	import { getPopstateReplayDelta } from '../worklog/replayPopstate';
+	import { durabilityMessageKey, shouldHoldNavigation, type EditorDurability } from './diaryEventNavigation';
 
 	interface Props {
 		/** The diary day being viewed. Always the memo's date. */
@@ -26,9 +27,15 @@
 		memo?: WorkMemo | null;
 		/** `persisted` is false when the user leaves an empty draft behind. */
 		onDone: (result: { persisted: boolean }) => void;
+		/**
+		 * Publishes this editor's durability handle to the page, so the page can
+		 * make this editor durable before it hands the slot to another event.
+		 * Must be cleared on destroy.
+		 */
+		onDurabilityChange?: (handle: EditorDurability | null) => void;
 	}
 
-	let { date, memo = null, onDone }: Props = $props();
+	let { date, memo = null, onDone, onDurabilityChange }: Props = $props();
 
 	const SAVE_DEBOUNCE_MS = 800;
 
@@ -60,6 +67,7 @@
 
 	function handleContentChange(newContent: string) {
 		content = newContent;
+		saveError = null;
 		session?.handleContentChange(newContent);
 	}
 
@@ -73,12 +81,13 @@
 			return;
 		}
 		try {
-			// An empty draft never created anything, so this resolves immediately
-			// and the editor closes without touching the database.
-			await session.flush();
-		} catch {
+			// The shared durability contract: uploads settled, body saved, memo
+			// created if needed, associations reconciled. An empty draft never
+			// created anything, so this resolves without touching the database.
+			await session.flushDurably();
+		} catch (error) {
 			// Stay in the editor so the user sees the failure and can retry.
-			saveError = $t('diaryEvents.saveFailed');
+			saveError = $t(durabilityMessageKey(error));
 			return;
 		}
 		onDone({ persisted: session.memoId !== null });
@@ -99,16 +108,24 @@
 			isReplayingNavigation = false;
 			return;
 		}
-		if (navigation.to?.url.pathname === $page.url.pathname) return;
-		// Nothing typed, nothing queued: never interfere with ordinary diary
-		// navigation (previous/next day, drawer links).
-		if (!session?.hasPendingChanges()) return;
+		if (!session) return;
 
-		// Unsaved work is queued or in flight: hold the navigation until it is
-		// durable, then replay it.
+		// The session owns the definition of "something is at stake"; the pure
+		// helper owns the decision of which navigations can lose it. Neither one
+		// looks at a single save-machine phase, which is what let an in-flight
+		// image upload slip through before.
+		const mustHold = shouldHoldNavigation({
+			fromPathname: $page.url.pathname,
+			toPathname: navigation.to?.url.pathname ?? null,
+			hasDurabilityWork: session.hasDurabilityWork()
+		});
+		if (!mustHold) return;
+
+		// Unsaved or unlinked work is queued or in flight: hold the navigation
+		// until everything is durable, then replay it.
 		navigation.cancel();
 		session
-			.flush()
+			.flushDurably()
 			.then(() => {
 				isReplayingNavigation = true;
 				const target = navigation.to;
@@ -122,8 +139,9 @@
 					);
 				}
 			})
-			.catch(() => {
+			.catch((error) => {
 				// Flush failed: stay on the page so the user sees the error state.
+				saveError = $t(durabilityMessageKey(error));
 			});
 	});
 
@@ -165,6 +183,13 @@
 		content = s.currentContent;
 		machineState = s.getState();
 
+		// Publish the durability handle so the page can release this editor
+		// before it hands the slot to another event.
+		onDurabilityChange?.({
+			hasDurabilityWork: () => s.hasDurabilityWork(),
+			flushDurably: () => s.flushDurably()
+		});
+
 		// §11: a brand new entry gets the caret immediately.
 		focusEditor();
 		const raf = requestAnimationFrame(focusEditor);
@@ -177,6 +202,8 @@
 	});
 
 	onDestroy(() => {
+		// Clear first: from here on this editor must never be asked to release.
+		onDurabilityChange?.(null);
 		session?.destroy();
 		session = null;
 	});

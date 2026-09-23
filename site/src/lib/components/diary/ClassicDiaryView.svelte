@@ -69,10 +69,16 @@
 	// frame, and this does not depend on the ordering of sibling effects inside
 	// a single flush.
 	let editorOwner: DiaryEditorOwner = 'legacy';
+	// The slot's identity, applied in the same callback as the kind. `'new'` is a
+	// brand new draft, `` `memo:<id>` `` an existing event, null no event surface.
+	// Keeping both in one `apply` is what makes "open another event" a real
+	// handoff instead of a same-kind early return (Controller Review Fix 2).
+	let editorTarget: string | null = null;
 
 	const editorOwnership = new DiaryEditorOwnership({
-		apply: (owner) => {
-			editorOwner = owner;
+		apply: (slot) => {
+			editorOwner = slot.kind;
+			editorTarget = slot.target;
 		},
 		flush: () => tick()
 	});
@@ -288,8 +294,9 @@
 				<DiaryEvents
 					{date}
 					{editorOwner}
-					onEnterEventEditing={() => editorOwnership.enterEvent()}
-					onExitEventEditing={() => editorOwnership.exitEvent()}
+					{editorTarget}
+					onEnterEventEditing={(target, release) => editorOwnership.enterEvent(target, release)}
+					onExitEventEditing={(release) => editorOwnership.exitEvent(release)}
 				/>
 			</main>
 

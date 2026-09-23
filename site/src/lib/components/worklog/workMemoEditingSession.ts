@@ -14,6 +14,20 @@
  * behaviour: `WorkMemoSaveMachine` (single-flight / debounce / flush / POST
  * once / delete mutex), `WorkMemoImageUploadGate`, `WorkMemoMediaReconciler`
  * (the only association mutation owner) and the `workMemoContent` guards.
+ *
+ * Durability (added in Controller Review Fix 2)
+ * ---------------------------------------------
+ * This session is the single author of the "it is now safe to destroy this
+ * editor" question. Two methods carry that contract:
+ *
+ *   hasDurabilityWork()  — is there anything at stake right now?
+ *   flushDurably()       — make everything durable, or reject
+ *
+ * Both are one-line delegations to `workMemoDurability`, which owns the policy
+ * (and is the zero-import module the tests load). Callers must not assemble
+ * their own answer from individual machine phases; that definition is the only
+ * one, and it is shared by the navigation guard, the event-to-event handoff and
+ * the explicit "done" action.
  */
 
 import {
@@ -35,9 +49,28 @@ import {
 	isMediaSetStable,
 	shouldPersistContent
 } from './workMemoContent';
+import {
+	MediaReconcileTracker,
+	hasDurabilityWork,
+	retryAttachmentsWhenFailed,
+	runDurableFlush,
+	toDurabilityError
+} from './workMemoDurability';
 
 /** Status union owned by the save machine, re-exported for callers. */
 export type WorkMemoStatusValue = WorkMemoSnapshot['status'];
+
+/**
+ * The durability vocabulary lives in `workMemoDurability`, which owns the
+ * policy and is the module `node:test` can load. Re-exported so a host still
+ * has a single import site for the session.
+ */
+export {
+	ATTACHMENTS_NOT_DURABLE,
+	BODY_NOT_DURABLE,
+	WorkMemoDurabilityError
+} from './workMemoDurability';
+export type { WorkMemoDurabilityFailure } from './workMemoDurability';
 
 export interface WorkMemoEditingSessionOptions {
 	/** The diary day this memo belongs to. Never mutated by the session. */
@@ -84,6 +117,14 @@ export class WorkMemoEditingSession {
 	private status: WorkMemoStatusValue;
 	private isPinned: boolean;
 	private pendingImageUploadCount = 0;
+	private destroyed = false;
+
+	/**
+	 * Reconciliation bookkeeping. The reconciler serialises mutations itself and
+	 * resolves a superseded queued request as `stale`, so all the session has to
+	 * remember is *which* pass is the newest one — the tracker owns that.
+	 */
+	private readonly tracker = new MediaReconcileTracker();
 
 	constructor(options: WorkMemoEditingSessionOptions) {
 		this.content = options.initialContent ?? '';
@@ -140,13 +181,28 @@ export class WorkMemoEditingSession {
 	}
 
 	/**
-	 * True while a save is queued or in flight, or while the last attempt failed.
-	 * Callers that are about to navigate away use this to decide whether the
-	 * navigation has to be held back until the work is durable.
+	 * True while destroying this editor could still lose body content or
+	 * attachment associations.
+	 *
+	 * Reads the three sources of truth and hands them to `workMemoDurability`,
+	 * which owns the definition and the reasoning behind it. Nothing here
+	 * re-derives a second answer from the machine's phase.
+	 */
+	hasDurabilityWork(): boolean {
+		return hasDurabilityWork({
+			phase: this.machine.getState().phase,
+			pendingImageUploads: this.pendingImageUploadCount,
+			bodyPersistable: shouldPersistContent(this.content, this.pendingImageUploadCount),
+			reconcilePending: this.tracker.isPending
+		});
+	}
+
+	/**
+	 * Legacy name for {@link hasDurabilityWork}. Kept so an out-of-date caller
+	 * cannot silently fall back to the weaker phase-only answer.
 	 */
 	hasPendingChanges(): boolean {
-		const phase = this.machine.getState().phase;
-		return phase === 'scheduled' || phase === 'saving' || phase === 'error';
+		return this.hasDurabilityWork();
 	}
 
 	handleContentChange(newContent: string): void {
@@ -184,18 +240,50 @@ export class WorkMemoEditingSession {
 	}
 
 	/**
-	 * Wait for every in-flight image upload to settle. Rejects if an upload
-	 * failed. Exposed separately from `flush` for callers that must tell an
-	 * upload failure apart from a persistence failure and react differently.
+	 * Wait for every in-flight image upload to settle. Rejects with a
+	 * {@link WorkMemoDurabilityError} (`reason: 'uploads'`) if one failed.
+	 * Exposed separately from `flush` for callers that must tell an upload
+	 * failure apart from a persistence failure and react differently.
 	 */
 	async waitForUploads(): Promise<void> {
-		await this.gate.wait();
+		try {
+			await this.gate.wait();
+		} catch (error) {
+			throw toDurabilityError('uploads', error);
+		}
 	}
 
 	/** Wait for every in-flight upload, then persist every pending change. */
 	async flush(): Promise<void> {
 		await this.waitForUploads();
-		await this.machine.flush();
+		await this.persistBody();
+	}
+
+	/**
+	 * The "it is now safe to destroy this editor" contract.
+	 *
+	 * The sequence lives in `runDurableFlush` (uploads → persist → body
+	 * persistable → newest association pass), so the ordering — and its
+	 * reasoning — exists once instead of once per host. This method only
+	 * supplies the session's own facts. It rejects when any step is not durable,
+	 * and callers MUST keep the editor mounted on rejection.
+	 */
+	async flushDurably(): Promise<void> {
+		return runDurableFlush({
+			isDestroyed: () => this.destroyed,
+			waitForUploads: () => this.waitForUploads(),
+			persist: () => this.persistBody(),
+			isBodyPersistable: () => shouldPersistContent(this.content, this.pendingImageUploadCount),
+			// `persistBody()` has already run the create callback, so the
+			// post-create pass is tracked by the time this is awaited. Should an
+			// earlier pass have failed to prove the desired set, this explicit
+			// attempt issues one more instead of re-throwing a failure the user
+			// has no way to clear.
+			settleAttachments: () =>
+				retryAttachmentsWhenFailed(this.tracker, () =>
+					this.reconcileMediaAssociations(this.content, { force: true })
+				)
+		});
 	}
 
 	/** Delete the memo. Waits for an in-flight save before removing. */
@@ -204,6 +292,7 @@ export class WorkMemoEditingSession {
 	}
 
 	destroy(): void {
+		this.destroyed = true;
 		this.reconciler.invalidate();
 		this.machine.destroy();
 	}
@@ -237,8 +326,21 @@ export class WorkMemoEditingSession {
 	// Association bookkeeping is driven ONLY by the set of stable data-media-id
 	// values in the body, and the reconciler is a no-op when no memo exists yet
 	// and when the media set is unchanged — so ordinary typing issues no request.
+	//
+	// The pass is handed to the tracker rather than dropped: a durable flush must
+	// be able to await the NEWEST desired set, not just whatever happened to be
+	// in flight.
 	private reconcileMediaAssociations(source: string, options: { force?: boolean } = {}): void {
 		if (!isMediaSetStable(source, this.pendingImageUploadCount)) return;
-		void this.reconciler.reconcile(extractDataMediaIds(source), options);
+		this.tracker.track(this.reconciler.reconcile(extractDataMediaIds(source), options));
+	}
+
+	/** Persist the body, reporting a rejection as a durability failure. */
+	private async persistBody(): Promise<void> {
+		try {
+			await this.machine.flush();
+		} catch (error) {
+			throw toDurabilityError('save', error);
+		}
 	}
 }

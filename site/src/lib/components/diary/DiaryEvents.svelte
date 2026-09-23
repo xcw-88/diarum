@@ -6,7 +6,13 @@
 	import DiaryRichContent from './DiaryRichContent.svelte';
 	import DiaryEventEditor from './DiaryEventEditor.svelte';
 	import { getEventTimeDisplay } from './diaryEventTime';
-	import type { DiaryEditorOwner } from './diaryEditorOwnership';
+	import {
+		NEW_EVENT_TARGET,
+		memoEventTarget,
+		memoIdFromTarget,
+		type DiaryEditorOwner
+	} from './diaryEditorOwnership';
+	import { durabilityMessageKey, type EditorDurability } from './diaryEventNavigation';
 
 	/**
 	 * The day's Events, stored as individual `work_memos` rows.
@@ -18,43 +24,79 @@
 	 * handlers (see `diaryEditorOwnership`).
 	 *
 	 * This component therefore does not decide on its own when to mount an
-	 * editor. It asks the parent (`ClassicDiaryView`) to hand the slot over and
-	 * only renders the editor once `editorOwner` says the handoff completed —
-	 * which is strictly after the legacy diary editor was torn down. `editorTarget`
-	 * still owns *which* event is being edited; `editorOwner` owns *whether an
-	 * editor may exist at all*.
+	 * editor, and — since Controller Review Fix 2 — no longer decides *which*
+	 * one is mounted either. It asks the parent to move the page's slot and
+	 * renders whichever surface the committed slot names. That is what turns
+	 * "open another event" into a real handoff: the parent releases the outgoing
+	 * editor before tearing it down, so its queued autosave cannot be dropped by
+	 * a plain DOM diff.
+	 *
+	 * `editorOwner` is the slot kind (is an editor allowed at all?);
+	 * `editorTarget` is the slot identity (`new` or `memo:<id>`, which one?).
+	 * Both come from the parent and are applied together, so they can never
+	 * disagree about which surface is open.
 	 */
 	interface Props {
 		date: string;
 		/** The page's single editor-ownership state, owned by the parent. */
 		editorOwner: DiaryEditorOwner;
-		/** Two-phase handoff: resolves once the legacy editor has been torn down. */
-		onEnterEventEditing: () => Promise<void>;
-		/** Two-phase handoff: resolves once the event editor has been torn down. */
-		onExitEventEditing: () => Promise<void>;
+		/** Committed slot identity: `new`, `memo:<id>`, or null. */
+		editorTarget: string | null;
+		/**
+		 * Requests the slot for an event surface. `release` makes the outgoing
+		 * event durable first; the promise rejects when it could not be.
+		 */
+		onEnterEventEditing: (target: string, release: () => Promise<void>) => Promise<void>;
+		/** Gives the slot back, releasing the outgoing event editor first. */
+		onExitEventEditing: (release: () => Promise<void>) => Promise<void>;
 	}
 
-	let { date, editorOwner, onEnterEventEditing, onExitEventEditing }: Props = $props();
+	let { date, editorOwner, editorTarget, onEnterEventEditing, onExitEventEditing }: Props =
+		$props();
 
 	let memos = $state<WorkMemo[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
-	/** At most one surface: a new draft, one existing event, or nothing. */
-	let editorTarget = $state<{ kind: 'new' } | { kind: 'edit'; id: string } | null>(null);
+	/**
+	 * Shown when a handoff was refused because the outgoing event could not be
+	 * made durable. Owned here, not by the outgoing editor, so that clicking the
+	 * next event cannot swallow the error the previous one produced.
+	 */
+	let handoffError = $state<string | null>(null);
+	/**
+	 * Durability handle of the editor that currently holds the slot. Read lazily
+	 * when a release actually runs, so it always names the editor mounted at that
+	 * moment rather than the one that was mounted when the click happened.
+	 */
+	let activeEditor: EditorDurability | null = null;
 
 	let abortController: AbortController | null = null;
 	let requestSequence = 0;
 	let loadedDate = '';
 
+	/**
+	 * Which surface the committed slot names, if any. Both guards fold in
+	 * `editorOwner === 'event'`, so an editor can never be mounted for a target
+	 * the page has not actually granted, and the slot kind and the slot identity
+	 * can never disagree about what is open.
+	 */
+	let mountedNewDraft = $derived(editorOwner === 'event' && editorTarget === NEW_EVENT_TARGET);
+	let mountedMemoId = $derived(editorOwner === 'event' ? memoIdFromTarget(editorTarget) : null);
+
+	const releaseActiveEditor = () => activeEditor?.flushDurably() ?? Promise.resolve();
+
+	function handleDurabilityChange(handle: EditorDurability | null) {
+		activeEditor = handle;
+	}
+
 	$effect(() => {
 		if (!date || date === loadedDate) return;
 		loadedDate = date;
 		// A draft never follows the reader onto another day — and the slot must
-		// be given back, otherwise the body would stay read-only forever.
-		if (editorTarget !== null) {
-			editorTarget = null;
-			void onExitEventEditing();
-		}
+		// be given back, otherwise the body would stay read-only forever. The
+		// navigation guard has already made the event durable by this point; the
+		// release here is the safety net for any path that bypassed it.
+		if (editorTarget !== null) void requestExit();
 		void loadMemos(date);
 	});
 
@@ -95,27 +137,45 @@
 	}
 
 	/**
-	 * `editorTarget` is set first so the slot is reserved in the same flush, but
-	 * the editor still cannot mount until `editorOwner === 'event'` — which only
-	 * happens after the legacy editor has been torn down.
+	 * Ask the parent to move the slot to `target`.
+	 *
+	 * Nothing is assigned locally: the outgoing editor is released *before* the
+	 * parent applies the new target, and the new target is applied only after the
+	 * outgoing editor has been torn down and committed to the DOM. A refusal
+	 * leaves the current editor mounted and editable, and surfaces the reason.
 	 */
+	async function requestEvent(target: string) {
+		if (editorOwner === 'event' && editorTarget === target) return;
+		handoffError = null;
+		try {
+			await onEnterEventEditing(target, releaseActiveEditor);
+		} catch (err) {
+			handoffError = $t(durabilityMessageKey(err));
+		}
+	}
+
+	function requestExit() {
+		handoffError = null;
+		void onExitEventEditing(releaseActiveEditor).catch((err) => {
+			handoffError = $t(durabilityMessageKey(err));
+		});
+	}
+
+	/** Claim a slot for a brand new draft. */
 	function startNewEvent() {
+		// Preserved from the pre-Fix-2 behaviour: a draft or an open event is
+		// never replaced by the "add" affordance, so this cannot discard a new
+		// draft that has not been persisted yet.
 		if (editorTarget !== null) return;
-		editorTarget = { kind: 'new' };
-		void onEnterEventEditing();
+		void requestEvent(NEW_EVENT_TARGET);
 	}
 
 	function openEvent(memo: WorkMemo) {
-		if (editorTarget?.kind === 'edit' && editorTarget.id === memo.id) return;
-		editorTarget = { kind: 'edit', id: memo.id };
-		void onEnterEventEditing();
+		void requestEvent(memoEventTarget(memo.id));
 	}
 
 	function handleEditorDone(result: { persisted: boolean }) {
-		editorTarget = null;
-		// Give the slot back: the event editor is torn down first, and only after
-		// that flush does the legacy diary editor remount.
-		void onExitEventEditing();
+		requestExit();
 		// A draft that never produced content created no row, so there is
 		// nothing to refresh.
 		if (result.persisted) void loadMemos(date);
@@ -166,17 +226,26 @@
 	{:else if loading}
 		<p class="text-sm text-muted-foreground/70">{$t('common.loading')}</p>
 	{:else}
-		{#if memos.length === 0 && !editorTarget}
+		{#if memos.length === 0 && editorTarget === null}
 			<p class="mb-3 text-sm text-muted-foreground/70">{$t('diaryEvents.empty')}</p>
+		{/if}
+
+		{#if handoffError}
+			<p class="mb-3 rounded-xl border border-destructive/20 bg-destructive/5 p-3 text-sm text-destructive">
+				{handoffError}
+			</p>
 		{/if}
 
 		{#if memos.length > 0}
 			<div class="space-y-4">
 				{#each memos as memo (memo.id)}
-					{#if editorTarget?.kind === 'edit' && editorTarget.id === memo.id}
-						{#if editorOwner === 'event'}
-							<DiaryEventEditor {date} {memo} onDone={handleEditorDone} />
-						{/if}
+					{#if mountedMemoId === memo.id}
+						<DiaryEventEditor
+							{date}
+							{memo}
+							onDone={handleEditorDone}
+							onDurabilityChange={handleDurabilityChange}
+						/>
 					{:else}
 						<article class="group border-l-2 border-border/50 pl-3 sm:pl-4">
 							<div class="mb-1 flex items-center gap-2">
@@ -202,10 +271,10 @@
 			</div>
 		{/if}
 
-		{#if editorTarget?.kind === 'new'}
+		{#if editorTarget === NEW_EVENT_TARGET}
 			<div class="mt-4">
-				{#if editorOwner === 'event'}
-					<DiaryEventEditor {date} onDone={handleEditorDone} />
+				{#if mountedNewDraft}
+					<DiaryEventEditor {date} onDone={handleEditorDone} onDurabilityChange={handleDurabilityChange} />
 				{/if}
 			</div>
 		{:else}
