@@ -637,6 +637,10 @@ describe('production component wiring', () => {
 		new URL('./WorkMemoEditor.svelte', import.meta.url),
 		'utf8'
 	);
+	const sessionSource = readFileSync(
+		new URL('./workMemoEditingSession.ts', import.meta.url),
+		'utf8'
+	);
 	const tiptapEditorSource = readFileSync(
 		new URL('../editor/TiptapEditor.svelte', import.meta.url),
 		'utf8'
@@ -645,7 +649,21 @@ describe('production component wiring', () => {
 	it('uses the reconciler as the only Work Memo association mutation owner', () => {
 		assert.doesNotMatch(workMemoEditorSource, /WorkMemoMediaCoordinator|mediaCoordinator/);
 		assert.doesNotMatch(workMemoEditorSource, /onMediaCommitted|handleMediaCommitted/);
-		assert.equal((workMemoEditorSource.match(/attachWorkMemoMedia/g) ?? []).length, 2);
+		// The editor hands the media API to the shared session and never mutates
+		// associations itself, so each function appears exactly twice: the import
+		// and the injected dependency.
+		for (const fn of ['attachWorkMemoMedia', 'detachWorkMemoMedia', 'listWorkMemoMedia']) {
+			assert.equal(
+				(workMemoEditorSource.match(new RegExp(fn, 'g')) ?? []).length,
+				2,
+				`${fn} must only be imported and passed to the session`
+			);
+		}
+		assert.doesNotMatch(
+			workMemoEditorSource,
+			/mediaReconciler/,
+			'the reconciler is owned by the session, not by the editor'
+		);
 	});
 
 	it('new memo creation only navigates and leaves association work to the edit route', () => {
@@ -659,9 +677,21 @@ describe('production component wiring', () => {
 	});
 
 	it('the edit route sets the memo id and forces one initial reconciliation', () => {
+		// The editor used to perform this recovery pass inline. It now hands the
+		// memo id to the shared session, which owns the pass for both hosts; the
+		// new-memo flow is kept out of it via `reconcileOnCreate: false`, because
+		// this component navigates away and the edit route owns that one pass.
+		assert.match(workMemoEditorSource, /memoId: memo\?\.id \?\? null,/);
+		assert.match(workMemoEditorSource, /reconcileOnCreate: false,/);
+
 		assert.match(
-			workMemoEditorSource,
-			/if \(memo\?\.id\) \{[\s\S]*?mediaReconciler\.setMemoId\(memo\.id\);[\s\S]*?reconcileMediaAssociations\(memo\.content \?\? '', \{ force: true \}\);/
+			sessionSource,
+			/if \(options\.memoId\) \{[\s\S]*?setMemoId\(options\.memoId\);[\s\S]*?reconcileMediaAssociations\(this\.content, \{ force: true \}\);/
+		);
+		assert.match(
+			sessionSource,
+			/if \(this\.reconcileOnCreate\) \{/,
+			'the post-create pass must stay behind the reconcileOnCreate switch'
 		);
 	});
 

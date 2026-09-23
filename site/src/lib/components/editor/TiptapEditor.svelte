@@ -18,7 +18,7 @@
 	import { uploadImage, getMediaUrl, isCheveretoResult } from '$lib/utils/uploadImage';
 	import { extractCommittableMediaId } from '$lib/components/worklog/workMemoMediaAssociation';
 	import { SlashCommands } from './SlashCommands';
-	import { getSuggestionItems, setImageUploadTrigger, setGalleryPickerTrigger } from './commands';
+	import { getSuggestionItems, setImageUploadTrigger, setGalleryPickerTrigger, clearImageUploadTrigger, clearGalleryPickerTrigger } from './commands';
 	import { suggestionRenderer, showCommandMenu } from './suggestionRenderer';
 	import MediaPicker from './MediaPicker.svelte';
 	import { getMediaFileUrl, addMediaDiary } from '$lib/api/media';
@@ -360,10 +360,16 @@ function handleFileSelect(event: Event) {
 	});
 
 	onDestroy(() => {
-		// Cleanup image upload trigger
-		setImageUploadTrigger(null);
-		// Cleanup gallery picker trigger
-		setGalleryPickerTrigger(null);
+		// Release the triggers only if this instance still owns them. A blanket
+		// `set...(null)` would also clear the handlers of a newer instance that
+		// had already replaced ours, leaving that editor with a dead image
+		// command. Hosts are still required to keep at most one image-capable
+		// editor mounted at a time (see `diary/diaryEditorOwnership`); this is
+		// the second line of defence, not a licence to overlap.
+		if (allowImages) {
+			clearImageUploadTrigger(handleSlashImage);
+			clearGalleryPickerTrigger(handleGalleryPicker);
+		}
 		if (uploadErrorTimer) clearTimeout(uploadErrorTimer);
 		editor?.destroy();
 	});

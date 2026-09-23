@@ -1,12 +1,16 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
+	import { t } from '$lib/i18n';
 	import TiptapEditor from '$lib/components/editor/TiptapEditor.svelte';
 	import TableOfContents from '$lib/components/ui/TableOfContents.svelte';
 	import EntryNav from '$lib/components/ui/EntryNav.svelte';
 	import Footer from '$lib/components/ui/Footer.svelte';
 	import DiaryShareModal from '$lib/components/share/DiaryShareModal.svelte';
+	import DiaryEvents from './DiaryEvents.svelte';
+	import DiaryRichContent from './DiaryRichContent.svelte';
+	import { DiaryEditorOwnership, type DiaryEditorOwner } from './diaryEditorOwnership';
 	import { getDiaryByDate } from '$lib/api/diaries';
 	import { isAuthenticated } from '$lib/api/client';
 	import { getDiaryEmojiSettings } from '$lib/api/settings';
@@ -48,6 +52,30 @@
 	let shareOpenedByMouse = false;
 	let date = getToday();
 	let cacheReady = false;
+
+	// This page has exactly ONE image-capable TipTap slot. The editor registers
+	// its image/gallery handlers in a module-level singleton
+	// (`editor/commands.ts`) and clears them unconditionally when it is
+	// destroyed, so two mounted instances would both overwrite each other and —
+	// worse — the first one to unmount would wipe the handlers the survivor
+	// still needs. The dangerous ordering is exactly the one a naive
+	// "swap the branches and let reactivity settle" produces.
+	//
+	// `editorOwner` is therefore the single source of truth for who holds the
+	// slot, and it is moved by `DiaryEditorOwnership` through an explicit
+	// intermediate 'none' state with a real flush boundary (`tick`) in between:
+	// the outgoing editor is destroyed and committed to the DOM before the
+	// incoming one is allowed to mount. The two never coexist, not even for one
+	// frame, and this does not depend on the ordering of sibling effects inside
+	// a single flush.
+	let editorOwner: DiaryEditorOwner = 'legacy';
+
+	const editorOwnership = new DiaryEditorOwnership({
+		apply: (owner) => {
+			editorOwner = owner;
+		},
+		flush: () => tick()
+	});
 
 	function captureShareSelection() {
 		shareSelectedContent = selectedContent;
@@ -236,16 +264,33 @@
 					</div>
 				{:else}
 					<div class="bg-card rounded-xl shadow-sm border border-border/50 overflow-hidden animate-fade-in">
-						<TiptapEditor
-							{content}
-							bind:selectedContent
-							onChange={handleContentChange}
-							placeholder="What's on your mind today?"
-							emptyStatePrompt="✨ Reflect on today... What will you remember from this day?"
-							diaryDate={date}
-						/>
+						{#if editorOwner === 'legacy'}
+							<TiptapEditor
+								{content}
+								bind:selectedContent
+								onChange={handleContentChange}
+								placeholder="What's on your mind today?"
+								emptyStatePrompt="✨ Reflect on today... What will you remember from this day?"
+								diaryDate={date}
+							/>
+						{:else}
+							<!-- 'none' is the handoff's flush boundary and 'event' is the
+							     event editor holding the slot: in both the diary body is
+							     rendered read-only, so no second editor is ever mounted. -->
+							<div class="px-4 py-3">
+								<p class="mb-2 text-xs text-muted-foreground">{$t('diaryEvents.legacyReadOnly')}</p>
+								<DiaryRichContent html={content} fallback={$t('diaryEvents.legacyEmpty')} />
+							</div>
+						{/if}
 					</div>
 				{/if}
+
+				<DiaryEvents
+					{date}
+					{editorOwner}
+					onEnterEventEditing={() => editorOwnership.enterEvent()}
+					onExitEventEditing={() => editorOwnership.exitEvent()}
+				/>
 			</main>
 
 			<!-- Desktop Right Sidebar -->

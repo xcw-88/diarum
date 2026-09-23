@@ -888,3 +888,57 @@ func TestWorkMemoCalendarInvalidMonth(t *testing.T) {
 		}
 	}
 }
+
+// A work memo is owner-specific private data (owner, date and full body), so no
+// cache layer may keep a copy: a cache entry is keyed by URL and does not vary
+// with the Bearer token, and the PWA's generic `/api/**` rule is a NetworkFirst
+// cache with a 7-day expiration. Without these headers a second account signing
+// in on the same browser could be served the previous account's memos.
+//
+// The contract is applied to the whole /api/v1/work-memos subtree, so this
+// covers the read endpoints the diary page actually calls as well as any future
+// one; the error paths are exercised too, since the header is set before the
+// handler runs.
+func TestWorkMemoReadsArePrivateNoStore(t *testing.T) {
+	s := newTestStore(t)
+	user := newTestUser(t, s)
+	e := registerWorkMemoTestRoutes(t, s, user)
+
+	memo := createWorkMemoAuto(t, e, "2026-09-23", "<p>private body</p>")
+	id, _ := memo["id"].(string)
+	if id == "" {
+		t.Fatalf("created memo has no id: %#v", memo)
+	}
+
+	cases := []struct {
+		name   string
+		path   string
+		status int
+	}{
+		{"list by date", "/api/v1/work-memos/by-date/2026-09-23", http.StatusOK},
+		{"calendar", "/api/v1/work-memos/calendar?month=2026-09", http.StatusOK},
+		{"get by id", "/api/v1/work-memos/" + id, http.StatusOK},
+		{"media associations", "/api/v1/work-memos/" + id + "/media", http.StatusOK},
+		// Validation and auth failures must not fall back to a cacheable 400/401.
+		{"invalid date", "/api/v1/work-memos/by-date/not-a-date", http.StatusBadRequest},
+		{"missing memo", "/api/v1/work-memos/does-not-exist", http.StatusNotFound},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := performRequest(t, e, http.MethodGet, tc.path, nil, nil)
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d, want %d body=%s", rec.Code, tc.status, rec.Body.String())
+			}
+
+			if got := rec.Header().Get(echo.HeaderCacheControl); got != "private, no-store" {
+				t.Fatalf("Cache-Control = %q, want %q", got, "private, no-store")
+			}
+			// A cache that ignores `private` still must not reuse the response
+			// for a request carrying another token.
+			if got := rec.Header().Get(echo.HeaderVary); !strings.Contains(got, echo.HeaderAuthorization) {
+				t.Fatalf("Vary = %q, want it to contain %q", got, echo.HeaderAuthorization)
+			}
+		})
+	}
+}

@@ -14,7 +14,11 @@ import (
 
 // RegisterWorkMemoRoutes registers REST endpoints for the independent work memo module.
 func RegisterWorkMemoRoutes(e *echo.Echo, s *store.Store, authMiddleware echo.MiddlewareFunc) {
-	group := e.Group("/api/v1/work-memos", authMiddleware)
+	// Every work memo is owner-specific private data: a memo carries its owner,
+	// its `date` and its full body, and the list endpoint answers "what did this
+	// user write that day". The whole subtree therefore shares one "never cache"
+	// contract.
+	group := e.Group("/api/v1/work-memos", authMiddleware, workMemosPrivateNoStore)
 
 	group.POST("", createWorkMemoHandler(s))
 	group.GET("/calendar", workMemoCalendarHandler(s))
@@ -28,6 +32,34 @@ func RegisterWorkMemoRoutes(e *echo.Echo, s *store.Store, authMiddleware echo.Mi
 	group.DELETE("/:id", deleteWorkMemoHandler(s))
 
 	RegisterWorkMemoMediaRoutes(group, s)
+}
+
+// workMemosPrivateNoStore marks every response of the work-memo subtree as
+// owner-specific private data.
+//
+// Why this is needed at the transport layer: a cache entry is keyed by URL and
+// does not vary with the Bearer token. A cacheable work-memo response would
+// therefore let a second account signing in on the same browser read the
+// previous account's memos - through the PWA `api-cache` (whose generic
+// `/api/**` NetworkFirst rule has a 7-day expiration) or while offline.
+//
+// `private` keeps shared and intermediary caches out, `no-store` forbids every
+// cache layer (the browser HTTP cache, the disk cache and a service worker's
+// Cache Storage) from keeping a copy, and `Vary: Authorization` denies reuse to
+// a cache that ignores `private`. The response header is set before the handler
+// runs, so validation and server errors carry the same contract instead of
+// falling back to a cacheable 400/500.
+//
+// It is applied to the whole group rather than per handler so that a newly added
+// work-memo read cannot silently miss the contract. The search and
+// media-association handlers additionally set it inline, which is redundant but
+// keeps each of those reviewed endpoints self-contained.
+func workMemosPrivateNoStore(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		c.Response().Header().Set(echo.HeaderCacheControl, "private, no-store")
+		c.Response().Header().Set(echo.HeaderVary, echo.HeaderAuthorization)
+		return next(c)
+	}
 }
 
 // optionalString unmarshals a JSON value and records whether the field was

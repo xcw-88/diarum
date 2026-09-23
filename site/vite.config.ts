@@ -125,20 +125,27 @@ export default defineConfig({
 						}
 					},
 					{
-						// Worklog search responses are authenticated, user-private
-						// data, so they must never be written to Cache Storage: a
-						// cache entry is keyed by URL and does not vary with the
-						// Bearer token, so the generic `api-cache` below could
-						// hand one account the previous account's search snippets
-						// for the same `/search?q=...` URL while offline or after
-						// a NetworkFirst timeout. This rule is declared *before*
-						// the generic `/api/` rule on purpose - Workbox uses
-						// first-match semantics, so a later rule can never
-						// override an earlier one. `cache: 'no-store'` keeps the
-						// browser HTTP cache out of the picture too; the backend
-						// sends `Cache-Control: private, no-store` as well, so
-						// the boundary holds even if this rule is dropped.
-						urlPattern: /\/api\/v1\/work-memos\/search(\?|$)/i,
+						// Every work memo is owner-specific private data - it carries
+						// its owner, its `date` and its full body, and
+						// `/by-date/<date>` answers "what did this user write that
+						// day". None of it may be written to Cache Storage: a cache
+						// entry is keyed by URL and does not vary with the Bearer
+						// token, so the generic `api-cache` below (NetworkFirst, 7-day
+						// expiration) could hand one account the previous account's
+						// memos for the same URL while offline or after a
+						// NetworkFirst timeout.
+						//
+						// The rule covers the whole `/api/v1/work-memos` subtree -
+						// `/by-date/:date`, `/calendar`, `/:id`, `/:id/media` and
+						// `/search` - so a newly added read cannot miss the boundary.
+						// It is declared *before* the generic `/api/` rule on
+						// purpose: Workbox uses first-match semantics, so a later
+						// rule can never override an earlier one. `cache: 'no-store'`
+						// keeps the browser HTTP cache out of the picture too, and the
+						// backend sends `Cache-Control: private, no-store` +
+						// `Vary: Authorization` as well, so the boundary holds even if
+						// this rule is dropped.
+						urlPattern: /\/api\/v1\/work-memos(\/|\?|$)/i,
 						handler: 'NetworkOnly',
 						options: {
 							fetchOptions: { cache: 'no-store' }

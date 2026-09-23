@@ -12,20 +12,10 @@
 		type WorkMemoStatus
 	} from '$lib/api/workMemos';
 	import { getToday, formatWorklogHeaderDate } from '$lib/utils/date';
-	import {
-		getUploadCompletionDrain,
-		isContentEffectivelyEmpty,
-		isMediaSetStable,
-		shouldPersistContent
-	} from './workMemoContent';
-	import { WorkMemoImageUploadGate, type ImageUploadState } from './workMemoImageUploadGate';
-	import { WorkMemoMediaReconciler, extractDataMediaIds } from './workMemoMediaAssociation';
+	import type { ImageUploadState } from './workMemoImageUploadGate';
 	import { attachWorkMemoMedia, detachWorkMemoMedia, listWorkMemoMedia } from '$lib/api/workMemoMedia';
-	import {
-		WorkMemoSaveMachine,
-		type SaveMachineState,
-		type WorkMemoSnapshot
-	} from './workMemoSaveMachine';
+	import type { SaveMachineState } from './workMemoSaveMachine';
+	import { WorkMemoEditingSession } from './workMemoEditingSession';
 	import { getPopstateReplayDelta } from './replayPopstate';
 
 	interface Props {
@@ -36,103 +26,63 @@
 
 	let { memo = null, date, mode }: Props = $props();
 
+	// Display mirrors of the session's snapshot. The session is seeded from the
+	// same values in `onMount`; keeping the mirror as an effect rather than as a
+	// `$state(...)` initialiser is deliberate, so that a `memo` prop change is
+	// still reflected on screen exactly as before.
 	let content = $state('');
 	let status = $state<WorkMemoStatus>('normal');
 	let isPinned = $state(false);
-
-	let machine = $state<WorkMemoSaveMachine | null>(null);
-	const imageUploadGate = new WorkMemoImageUploadGate();
-	let pendingImageUploadCount = $state(0);
-	// Brings the server's association set back in line with the body's stable
-	// data-media-id set. Only media-set changes reach it; plain typing, status
-	// and pin changes never do.
-	const mediaReconciler = new WorkMemoMediaReconciler({
-		list: listWorkMemoMedia,
-		attach: attachWorkMemoMedia,
-		detach: detachWorkMemoMedia
-	});
 
 	$effect(() => {
 		content = memo?.content || '';
 		status = memo?.status || 'normal';
 		isPinned = memo?.is_pinned || false;
 	});
+
 	let machineState = $state<SaveMachineState | null>(null);
 	let showMenu = $state(false);
 	let showDeleteConfirm = $state(false);
+
+	/**
+	 * The single owner of the autosave / image-upload / media-reconciliation
+	 * orchestration, shared with the inline diary event editor so the two do not
+	 * fork. It drives `WorkMemoSaveMachine`, `WorkMemoImageUploadGate`,
+	 * `WorkMemoMediaReconciler` and the `workMemoContent` guards, which remain
+	 * the only behaviour primitives.
+	 */
+	let session: WorkMemoEditingSession | null = null;
 
 	// Prevents beforeNavigate from re-flushing a navigation that we initiated.
 	let isReplayingNavigation = $state(false);
 
 	const SAVE_DEBOUNCE_MS = 800;
 
-	function buildSnapshot(): WorkMemoSnapshot {
-		return { content, status, isPinned };
-	}
-
-	function scheduleSave() {
-		machine?.schedule(buildSnapshot());
-	}
-
-	// Single guarded entry point for every ordinary save. While an image upload
-	// placeholder (blob URL) is still in the content, the snapshot must NOT be
-	// persisted — the durable URL arrives via a later content update.
-	function scheduleSaveWhenContentStable() {
-		if (!shouldPersistContent(content, pendingImageUploadCount)) return;
-		scheduleSave();
-	}
-
 	function handleContentChange(newContent: string) {
 		content = newContent;
-		scheduleSaveWhenContentStable();
-		reconcileMediaAssociations(newContent);
-	}
-
-	// Association bookkeeping is driven ONLY by the set of stable data-media-id
-	// values in the body. While an upload placeholder is present the media set
-	// is not final, so the pass is skipped; the reconciler itself is a no-op
-	// when no memo id exists yet and when the media set is unchanged — so
-	// ordinary typing issues no request at all.
-	function reconcileMediaAssociations(source: string, options: { force?: boolean } = {}) {
-		if (!isMediaSetStable(source, pendingImageUploadCount)) return;
-		void mediaReconciler.reconcile(extractDataMediaIds(source), options);
+		session?.handleContentChange(newContent);
 	}
 
 	function handleImageUploadStateChange(state: ImageUploadState) {
-		const previousPending = pendingImageUploadCount;
-		pendingImageUploadCount = Math.max(0, state.pending);
-		imageUploadGate.update(state);
-
-		// Replacement/removal on the editor side fires onChange before the
-		// upload counter reaches zero, so that update is deliberately blocked.
-		// The final >0 -> 0 transition drains the latest stable editor state.
-		const drain = getUploadCompletionDrain(
-			previousPending,
-			pendingImageUploadCount,
-			content,
-			mediaReconciler.memoId !== null
-		);
-		if (drain.save) scheduleSaveWhenContentStable();
-		if (drain.reconcile) reconcileMediaAssociations(content);
+		session?.handleImageUploadStateChange(state);
 	}
 
 	async function flushEditor(): Promise<void> {
-		await imageUploadGate.wait();
-		await (machine?.flush() ?? Promise.resolve());
+		await (session?.flush() ?? Promise.resolve());
 	}
 
 	function handleStatusChange(newStatus: WorkMemoStatus) {
 		status = newStatus;
 		showMenu = false;
-		// Status/pin may still be toggled during an in-flight image upload; we
-		// just defer the save until the durable image URL replaces the blob.
-		scheduleSaveWhenContentStable();
+		// Status/pin may still be toggled during an in-flight image upload; the
+		// session defers the save until the durable image URL replaces the blob.
+		session?.setStatus(newStatus);
 	}
 
 	function handlePinToggle() {
 		isPinned = !isPinned;
 		showMenu = false;
-		scheduleSaveWhenContentStable();
+		session?.setPinned(isPinned);
 	}
 
 	function handleBack() {
@@ -151,17 +101,19 @@
 
 	async function confirmDelete() {
 		showDeleteConfirm = false;
-		if (!machine) {
+		if (!session) {
 			handleBack();
 			return;
 		}
 		try {
-			await imageUploadGate.wait();
+			// Only the upload gate, so a failed upload keeps its own message
+			// instead of being reported as a failed delete.
+			await session.waitForUploads();
 		} catch {
 			window.alert($t('worklog.imageUploadFailed'));
 			return;
 		}
-		const ok = await machine.delete();
+		const ok = await session.delete();
 		if (!ok) {
 			window.alert($t('worklog.deleteFailed'));
 			return;
@@ -212,16 +164,13 @@
 		}
 		document.addEventListener('click', handleClickOutside);
 
-		const initialSnapshot: WorkMemoSnapshot = {
-			content: memo?.content || '',
-			status: memo?.status || 'normal',
-			isPinned: memo?.is_pinned || false
-		};
-
-		const m = new WorkMemoSaveMachine({
+		const s = new WorkMemoEditingSession({
 			date,
 			memoId: memo?.id ?? null,
-			initialSnapshot,
+			initialContent: memo?.content ?? '',
+			initialStatus: memo?.status ?? 'normal',
+			initialIsPinned: memo?.is_pinned ?? false,
+			debounceMs: SAVE_DEBOUNCE_MS,
 			create: async (targetDate, snapshot) => {
 				const created = await createWorkMemo({
 					date: targetDate,
@@ -241,41 +190,33 @@
 			remove: async (id) => {
 				await deleteWorkMemo(id);
 			},
+			listMedia: listWorkMemoMedia,
+			attachMedia: attachWorkMemoMedia,
+			detachMedia: detachWorkMemoMedia,
 			onCreated: (id) => {
-				// The old /new component must not mutate associations after it starts
-				// navigation. The edit route owns one initial forced reconciliation.
+				// The /new component must not mutate associations after it starts
+				// navigation: this `goto` unmounts it. The edit route owns exactly
+				// one initial forced reconciliation, which is why the session must
+				// not run its own post-create pass here.
 				goto(`/worklog/${date}/${id}`, { replaceState: true });
 			},
+			reconcileOnCreate: false,
 			onStateChange: (state) => {
 				machineState = state;
-			},
-			debounceMs: SAVE_DEBOUNCE_MS,
-			emptyContentPredicate: isContentEffectivelyEmpty
+			}
 		});
 
-		machine = m;
-		machineState = m.getState();
-
-		// Existing memo (including a memo just created on /new): the body is the
-		// sole desired-state source and this initial pass repairs associations.
-		if (memo?.id) {
-			mediaReconciler.setMemoId(memo.id);
-			// Initial recovery: the body may reference media whose association was
-			// lost by an earlier failed attach, and the server may hold
-			// associations the body no longer references. The memo's own content is
-			// the source of truth, so this never depends on reactive timing.
-			reconcileMediaAssociations(memo.content ?? '', { force: true });
-		}
+		session = s;
+		machineState = s.getState();
 
 		return () => {
 			document.removeEventListener('click', handleClickOutside);
-			m.destroy();
 		};
 	});
 
 	onDestroy(() => {
-		mediaReconciler.invalidate();
-		machine?.destroy();
+		session?.destroy();
+		session = null;
 	});
 </script>
 

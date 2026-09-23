@@ -125,6 +125,22 @@ export const en = {
 		noEntries: 'No entries yet. Start writing today!',
 		tagline: 'Your personal diary'
 	},
+	diaryEvents: {
+		heading: 'Events',
+		empty: 'No events recorded for this day yet.',
+		add: 'Record another entry',
+		done: 'Done',
+		editEvent: 'Edit this event',
+		backfilledAt: 'Backfilled on {date}, {time}',
+		saving: 'Saving...',
+		saved: 'Saved',
+		saveFailed: 'Could not save. Please try again.',
+		loadFailed: 'Failed to load the events for this day. Please try again.',
+		legacyReadOnly: 'Your diary entry is read-only while an event is being edited.',
+		legacyEmpty: 'No diary entry for this day yet.',
+		editorPlaceholder: 'Write what happened...',
+		editorEmptyPrompt: 'What happened?'
+	},
 	search: {
 		pageTitle: 'Search',
 		heading: 'Search Diaries',

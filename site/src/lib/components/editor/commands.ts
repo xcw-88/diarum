@@ -22,6 +22,23 @@ export function setGalleryPickerTrigger(trigger: GalleryPickerTrigger | null) {
 	galleryPickerTrigger = trigger;
 }
 
+/**
+ * Ownership-aware release. Call this from an editor's teardown instead of
+ * `setImageUploadTrigger(null)`: a blanket clear also wipes the trigger of a
+ * newer instance that has already registered its own, leaving that editor with
+ * a dead "insert image" command.
+ *
+ * Only the instance that still owns the slot clears it.
+ */
+export function clearImageUploadTrigger(trigger: ImageUploadTrigger) {
+	if (imageUploadTrigger === trigger) imageUploadTrigger = null;
+}
+
+/** Ownership-aware counterpart of `clearImageUploadTrigger`. */
+export function clearGalleryPickerTrigger(trigger: GalleryPickerTrigger) {
+	if (galleryPickerTrigger === trigger) galleryPickerTrigger = null;
+}
+
 export const getSuggestionItems = (query: string): CommandItem[] => {
 	const items: CommandItem[] = [
 		{

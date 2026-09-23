@@ -115,6 +115,22 @@ export const zh = {
 		noEntries: '还没有日记，今天就开始写吧！',
 		tagline: '你的私人日记'
 	},
+	diaryEvents: {
+		heading: '事件记录',
+		empty: '这一天还没有事件记录。',
+		add: '记录下一条',
+		done: '完成',
+		editEvent: '编辑这条事件',
+		backfilledAt: '补记于 {date} {time}',
+		saving: '保存中…',
+		saved: '已保存',
+		saveFailed: '保存失败，请重试。',
+		loadFailed: '加载当天事件失败，请重试。',
+		legacyReadOnly: '正在编辑事件，日记正文暂为只读。',
+		legacyEmpty: '这一天还没有日记正文。',
+		editorPlaceholder: '记录发生了什么…',
+		editorEmptyPrompt: '接下来发生了什么？'
+	},
 	search: {
 		pageTitle: '搜索',
 		heading: '搜索日记',
