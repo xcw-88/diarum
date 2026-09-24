@@ -28,6 +28,35 @@
  * their own answer from individual machine phases; that definition is the only
  * one, and it is shared by the navigation guard, the event-to-event handoff and
  * the explicit "done" action.
+ *
+ * Committing a status change (Controller Review Fix 1, narrowed by Fix 2)
+ * ----------------------------------------------------------------------
+ * The session is also the only writer of a status change made from an open
+ * editor, and the ORDER matters:
+ *
+ *   await session.flushDurably()              // barrier — still the OLD status
+ *   session.setStatus(next)                   // move the machine's one snapshot
+ *   await session.flushThroughStatus(next)    // persist THAT revision
+ *
+ * `flushDurably()` first is what makes "the todo failed" and "the new status is
+ * on the server" mutually exclusive: it is the only step that can fail for a
+ * reason unrelated to the status (an upload or an association pass), and it runs
+ * while the snapshot still holds the old status, so a rejection there wrote
+ * nothing.
+ *
+ * The third step is `flushThroughStatus` and deliberately neither of the two
+ * obvious alternatives:
+ *
+ *  - not `flushDurably()` — the barrier already settled uploads, the body and
+ *    the association set, so asking the association layer again would let a
+ *    media failure reject a commit whose write had already landed (Fix 1);
+ *  - not `flush()` — `flush()` keeps working until the *last* pending change is
+ *    saved, so a body generation typed after the status shipped could fail and
+ *    reject a status write that had already succeeded, and the caller would roll
+ *    back a todo the server already held (Fix 2, P1-1).
+ *
+ * `createSessionStatusCommit` in the diary module spells this out so it can be
+ * tested against the real save machine.
  */
 
 import {
@@ -181,6 +210,17 @@ export class WorkMemoEditingSession {
 	}
 
 	/**
+	 * The status the single snapshot currently holds.
+	 *
+	 * A read of the one source of truth, not a second copy: the todo commit path
+	 * needs the old status before it mutates (to restore it if the write fails),
+	 * and reading the machine keeps that from becoming a parallel variable.
+	 */
+	getStatus(): WorkMemoStatusValue {
+		return this.status;
+	}
+
+	/**
 	 * True while destroying this editor could still lose body content or
 	 * attachment associations.
 	 *
@@ -257,6 +297,30 @@ export class WorkMemoEditingSession {
 	async flush(): Promise<void> {
 		await this.waitForUploads();
 		await this.persistBody();
+	}
+
+	/**
+	 * Persist the snapshot's **current status**, and resolve as soon as that
+	 * status is on the server.
+	 *
+	 * The narrower sibling of {@link flush}, and the one a todo commit uses: the
+	 * obligation is the status revision, not "every pending change". `flush()`
+	 * also awaits body generations the user produced while the request was in
+	 * flight, so a *later* body failure would reject a promise whose status had
+	 * already landed — and the caller would roll back a todo the server had
+	 * already accepted (Controller Review Fix 2, P1-1).
+	 *
+	 * The write still goes through the one writer: a one-line delegation to the
+	 * machine's `flushThroughStatus`, with a rejection reported in the same
+	 * durability vocabulary as every other save failure. No second queue, no
+	 * second snapshot, no second save guard.
+	 */
+	async flushThroughStatus(status: WorkMemoStatusValue): Promise<void> {
+		try {
+			await this.machine.flushThroughStatus(status);
+		} catch (error) {
+			throw toDurabilityError('save', error);
+		}
 	}
 
 	/**

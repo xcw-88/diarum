@@ -279,6 +279,69 @@ export class WorkMemoSaveMachine {
 	}
 
 	/**
+	 * Persist the snapshot until the machine has shipped **`status`**, and
+	 * resolve as soon as a request carrying it has succeeded.
+	 *
+	 * Why this is not `flush()`. `flush()` resolves when *every* pending change
+	 * is saved, so it also waits for changes the user made while the request was
+	 * in flight — and it rejects when one of *those* fails. For a status commit
+	 * that is the wrong obligation: the status may already be on the server, and
+	 * a later body generation failing is an ordinary autosave error that must not
+	 * be re-reported as "the status was not saved" (Controller Review Fix 2,
+	 * P1-1). This method's contract is exactly the status revision:
+	 *
+	 *   - a change that arrives afterwards is NOT part of the promise. It stays
+	 *     the ordinary autosave path's business, and it is still saved by the
+	 *     machine's normal follow-up scheduling;
+	 *   - `savedSnapshot` only ever moves on success, so reading
+	 *     `savedSnapshot.status === status` is reading "the server holds it" —
+	 *     no timeout heuristic, no extra bookkeeping, no second queue;
+	 *   - it rejects when an attempt fails while the obligation is still
+	 *     outstanding. At that point the status provably is not on the server
+	 *     through this call, and the caller must not claim otherwise.
+	 *
+	 * It does NOT send a status-only payload: the revision that carries the
+	 * status is the ordinary full snapshot the machine already owns, and the
+	 * request is issued by the same single-flight `tick`. Nothing here is a
+	 * second writer.
+	 */
+	async flushThroughStatus(status: WorkMemoSnapshot['status']): Promise<void> {
+		if (this.destroyed || this.isDeleting) {
+			throw new Error('Cannot persist a status on a machine that is not saving');
+		}
+
+		// The debounce must not be what decides when a status lands.
+		this.clearTimer();
+
+		while (this.savedSnapshot.status !== status) {
+			if (this.destroyed || this.isDeleting) {
+				throw new Error('The save machine was torn down before the status was persisted');
+			}
+
+			if (this.savePromise) {
+				// An attempt is already on the wire — it may or may not carry the
+				// status. Await it and re-read. `tick` handles its own rejection,
+				// so a rejection here is the transport's, and it means the
+				// obligation is still unmet.
+				await this.savePromise;
+				continue;
+			}
+
+			if (!this.needsSave()) {
+				// Nothing is dirty yet the server does not hold the status: the
+				// snapshot was rolled back underneath this call. Reporting success
+				// would be a lie, and looping would not terminate.
+				throw new Error('The status was no longer in the snapshot to persist');
+			}
+
+			await this.tick();
+			if (this.phase === 'error') {
+				throw new Error(this.error || 'Save failed while persisting a status');
+			}
+		}
+	}
+
+	/**
 	 * Delete the memo. Waits for any in-flight save to finish first, then
 	 * performs the delete. No further saves are accepted after this returns
 	 * successfully.

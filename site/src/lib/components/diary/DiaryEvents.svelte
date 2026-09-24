@@ -1,11 +1,24 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { t, getIntlLocale } from '$lib/i18n';
-	import { listWorkMemosByDate, WorkMemoApiError, type WorkMemo } from '$lib/api/workMemos';
+	import { listWorkMemosByDate, updateWorkMemoStatus, WorkMemoApiError, type WorkMemo } from '$lib/api/workMemos';
 	import { formatShortDate, isValidDate } from '$lib/utils/date';
 	import DiaryRichContent from './DiaryRichContent.svelte';
 	import DiaryEventEditor from './DiaryEventEditor.svelte';
+	import DiaryTodoControl from './DiaryTodoControl.svelte';
+	import {
+		diaryTodoFailureKey,
+		runDiaryTodoAction,
+		type DiaryTodoAction,
+		type DiaryTodoApplyResult,
+		type DiaryTodoStatus
+	} from './diaryTodoStatus';
 	import { getEventTimeDisplay } from './diaryEventTime';
+	import {
+		DiaryTodoAcceptedStatuses,
+		DiaryTodoPendingMutations,
+		enterEventWhenTodoSettled
+	} from './diaryTodoCoordination';
 	import {
 		NEW_EVENT_TARGET,
 		memoEventTarget,
@@ -89,6 +102,168 @@
 		activeEditor = handle;
 	}
 
+	/**
+	 * Todo writes in flight, keyed by memo id.
+	 *
+	 * The registry is the authority — it holds the *promise*, so it answers both
+	 * "is this Event busy?" (the guard and the busy state) and "tell me when this
+	 * Event has settled" (the entry gate below). Per-Event rather than global:
+	 * two cards are two different rows, so a save on one must not silently
+	 * swallow a tap on another, and opening another Event must not wait for it.
+	 *
+	 * `todoPendingIds` is only the render mirror, kept in step by subscription so
+	 * the busy state cannot be true in one place and false in another.
+	 */
+	const todoMutations = new DiaryTodoPendingMutations();
+	let todoPendingIds = $state<string[]>(todoMutations.pendingIds);
+	let todoErrors = $state<Record<string, string>>({});
+
+	$effect(() => {
+		return todoMutations.subscribe(() => {
+			todoPendingIds = todoMutations.pendingIds;
+		});
+	});
+
+	/**
+	 * The statuses the backend has already accepted, with the revision that
+	 * accepted them (Controller Review Fix 3).
+	 *
+	 * Not the same question as the registry above: that one is about what is
+	 * still in flight, this one is about what this page already knows to be
+	 * true. A list response names the whole day, so it can replace a row — a row
+	 * a card write has just moved — and this is what keeps a response that was
+	 * already on the wire from putting the old status back.
+	 */
+	const todoAccepted = new DiaryTodoAcceptedStatuses();
+
+	function isTodoPending(id: string): boolean {
+		return todoPendingIds.includes(id);
+	}
+
+	function todoErrorFor(id: string): string | null {
+		return todoErrors[id] ?? null;
+	}
+
+	function setTodoError(id: string, message: string | null) {
+		const next = { ...todoErrors };
+		if (message === null) delete next[id];
+		else next[id] = message;
+		todoErrors = next;
+	}
+
+	/**
+	 * The card's write. Never rejects: a refusal is an ordinary outcome the card
+	 * renders, and the registry must not turn one into a rejected handle.
+	 *
+	 * Returns the status the backend accepted, or `null` when it refused. It
+	 * deliberately does **not** decide which object that status belongs to —
+	 * that is `applyAcceptedCardStatus` below — so this function cannot become
+	 * the owner of the live list.
+	 *
+	 * Only the status is sent, and the card shows it only once the backend
+	 * accepted it. The status-only request is what makes this path safe to run
+	 * while nothing is being edited: it sends `{ status }` and nothing else, so
+	 * it physically cannot carry a stale body.
+	 */
+	async function persistCardTodoStatus(
+		memo: WorkMemo,
+		action: DiaryTodoAction
+	): Promise<DiaryTodoStatus | null> {
+		const result = await runDiaryTodoAction(
+			{
+				// A rendered card is a stored row with no live body, so the
+				// durability barrier has nothing to settle and resolves
+				// immediately. The ordering invariant still holds: the status
+				// request below cannot be issued before the barrier resolved,
+				// and a card holds no draft, upload or association state that
+				// a failure could strand.
+				isPersisted: () => true,
+				isDraftEmpty: () => false,
+				getStatus: () => memo.status,
+				makeBodyDurable: async () => {},
+				commitStatus: async (next) => {
+					await updateWorkMemoStatus(memo.id, next);
+				}
+			},
+			action
+		);
+
+		if (!result.ok) {
+			if (result.error instanceof WorkMemoApiError && result.error.status === 401) {
+				goto('/login');
+				return null;
+			}
+			const message = todoFailureMessage(result);
+			if (message) setTodoError(memo.id, message);
+			return null;
+		}
+
+		return result.status;
+	}
+
+	/**
+	 * Publish a status the backend just accepted, then move the row the page is
+	 * rendering.
+	 *
+	 * Both halves are needed, and neither replaces the other:
+	 *
+	 *   - the **record** protects this acceptance from a list response that was
+	 *     already on the wire when it landed (see `reconcileLoadedMemos`);
+	 *   - the **row patch** is what makes the acceptance visible now. The click
+	 *     carried an object, but a response applying in between replaces the
+	 *     whole list, so the accepted status belongs to the row currently in
+	 *     `memos` — not to the object the caller happens to hold.
+	 *
+	 * The record is taken first so the revision is published before the row
+	 * moves. Both steps are synchronous, so no request can start between them
+	 * and be mistaken for one that started after the acceptance.
+	 */
+	function applyAcceptedCardStatus(id: string, status: DiaryTodoStatus) {
+		todoAccepted.recordAcceptedStatus(id, status);
+		todoAccepted.applyStatusToRows(memos, id, status);
+	}
+
+	/**
+	 * Change a **stored** Event's todo status from its read-only card.
+	 *
+	 * This is the one place the diary uses the status-only endpoint, and it is
+	 * the right one: a card is not being edited, so there is no live body to
+	 * submit and no debounced autosave that could later overwrite the status.
+	 *
+	 * An Event that IS open in an editor never reaches here — it is rendered by
+	 * `DiaryEventEditor` instead of by this card — and goes through the shared
+	 * editing session, which is the only writer that can keep a status change and
+	 * a pending body save from racing.
+	 *
+	 * The write is registered before it is awaited, so `openEvent` below can see
+	 * it and an editor can never be seeded from a status this write is about to
+	 * change (Controller Review Fix 2, P1-2). The registered promise is the one
+	 * that also applies the accepted status to the live row, so the gate wakes
+	 * up to a model that has already caught up (Fix 3).
+	 */
+	async function handleCardTodoAction(memo: WorkMemo, action: DiaryTodoAction) {
+		// The registry is the guard, not the render mirror: a tap that arrives
+		// while this Event's write is in flight is dropped, not queued.
+		if (todoMutations.isPending(memo.id)) return;
+		setTodoError(memo.id, null);
+		await todoMutations.track(
+			memo.id,
+			(async () => {
+				const accepted = await persistCardTodoStatus(memo, action);
+				if (accepted !== null) applyAcceptedCardStatus(memo.id, accepted);
+			})()
+		);
+	}
+
+	/**
+	 * A refused todo attempt never invents a message — the mapping lives in the
+	 * pure `diaryTodoStatus` module, so both surfaces phrase failures alike.
+	 */
+	function todoFailureMessage(result: DiaryTodoApplyResult): string | null {
+		const key = result.failure ? diaryTodoFailureKey(result.failure) : null;
+		return key ? $t(key) : null;
+	}
+
 	$effect(() => {
 		if (!date || date === loadedDate) return;
 		loadedDate = date;
@@ -112,12 +287,19 @@
 		loading = true;
 		error = null;
 
+		// Read the revision BEFORE the request goes out: every status accepted
+		// from here on is newer than anything this response can have observed,
+		// so a response that still carries the old status for an Event is
+		// corrected on the way in instead of replacing the row the card just
+		// moved (Controller Review Fix 3).
+		const loadStartedAtRevision = todoAccepted.getAcceptedRevision();
+
 		try {
 			// The backend owns ordering (pinned, then position, then created);
 			// the client never re-sorts.
 			const result = await listWorkMemosByDate(targetDate, controller.signal);
 			if (seq !== requestSequence) return;
-			memos = result.memos;
+			memos = todoAccepted.reconcileLoadedMemos(result.memos, loadStartedAtRevision);
 		} catch (err) {
 			if (err instanceof DOMException && err.name === 'AbortError') return;
 			if (err instanceof WorkMemoApiError && err.status === 401) {
@@ -170,8 +352,26 @@
 		void requestEvent(NEW_EVENT_TARGET);
 	}
 
+	/**
+	 * Open an Event in the inline editor.
+	 *
+	 * Gated on that Event's own card mutation (Controller Review Fix 2, P1-2).
+	 * The editor seeds its session from the status it is handed, so opening while
+	 * `normal -> pending` is still on the wire would seed it with `normal` — and
+	 * its first autosave would then PUT that straight back over the `pending` the
+	 * user had already been shown. Waiting here, and re-reading the model
+	 * afterwards instead of using the object captured at click time, closes that
+	 * race for every entry path rather than only for the button.
+	 *
+	 * Only the same Event waits (`settleTodo` is keyed by id), so a write in
+	 * flight for another Event never delays this one.
+	 */
 	function openEvent(memo: WorkMemo) {
-		void requestEvent(memoEventTarget(memo.id));
+		void enterEventWhenTodoSettled(memo.id, {
+			settleTodo: (id) => todoMutations.settle(id),
+			readMemo: (id) => memos.find((candidate) => candidate.id === id) ?? null,
+			enter: (fresh) => requestEvent(memoEventTarget(fresh.id))
+		});
 	}
 
 	function handleEditorDone(result: { persisted: boolean }) {
@@ -248,13 +448,23 @@
 						/>
 					{:else}
 						<article class="group border-l-2 border-border/50 pl-3 sm:pl-4">
-							<div class="mb-1 flex items-center gap-2">
+							<div class="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1">
 								<time class="min-w-0 text-xs font-medium tabular-nums text-muted-foreground" datetime={memo.created}>
 									{formatEventLabel(memo)}
 								</time>
+								<!-- The todo control belongs to THIS event's header, so
+								     it is always unambiguous which Event is being
+								     changed. `flex-wrap` is what keeps a long event
+								     from producing a horizontal scrollbar. -->
+								<DiaryTodoControl
+									status={memo.status}
+									busy={isTodoPending(memo.id)}
+									error={todoErrorFor(memo.id)}
+									onAction={(action) => handleCardTodoAction(memo, action)}
+								/>
 								<button
 									type="button"
-									class="flex-shrink-0 rounded-full p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+									class="ml-auto flex-shrink-0 rounded-full p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
 									onclick={() => openEvent(memo)}
 									aria-label={$t('diaryEvents.editEvent')}
 									title={$t('diaryEvents.editEvent')}

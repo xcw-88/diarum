@@ -133,7 +133,15 @@ export const zh = {
 		handoffFailed: '这条事件还未保存完成，已留在当前编辑状态，请重试。',
 		attachmentsFailed: '正文已保存，但图片关联未能写入，请重试。',
 		uploadFailed: '有图片上传失败，请先移除或重试再离开。',
-		leaveBlocked: '仍在保存中，请稍候重试。'
+		leaveBlocked: '仍在保存中，请稍候重试。',
+		todoSetPending: '设为待办',
+		todoCancel: '取消待办',
+		todoMarkComplete: '标记为已完成',
+		todoReopen: '重新打开为待办',
+		todoGroupLabel: '待办状态',
+		todoUpdating: '更新中…',
+		todoFailed: '待办状态更新失败，请重试。',
+		todoNeedsContent: '请先写下内容，再设为待办。'
 	},
 	search: {
 		pageTitle: '搜索',

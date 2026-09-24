@@ -1,4 +1,11 @@
 import { pb } from './client';
+import {
+	buildWorkMemoUpdateBody,
+	isWorkMemoStatusValue,
+	updateWorkMemoStatusRequest,
+	workMemoResourcePath,
+	type WorkMemoStatusValue
+} from './workMemoStatusCore';
 
 export interface WorkMemo {
 	id: string;
@@ -28,7 +35,14 @@ export interface WorkMemoCalendarResult {
 	days: WorkMemoCalendarDay[];
 }
 
-export type WorkMemoStatus = 'normal' | 'pending' | 'completed';
+/**
+ * The three states a Work Memo may hold. Owned by `workMemoStatusCore` (the
+ * module the tests can load) and re-exported here so every caller keeps the
+ * single import site it already had.
+ */
+export type WorkMemoStatus = WorkMemoStatusValue;
+
+export { buildWorkMemoStatusBody, isWorkMemoStatusValue, workMemoResourcePath } from './workMemoStatusCore';
 
 export class WorkMemoApiError extends Error {
 	constructor(
@@ -191,13 +205,9 @@ export async function updateWorkMemo(
 	input: UpdateWorkMemoInput,
 	signal?: AbortSignal
 ): Promise<WorkMemo> {
-	const body: Record<string, unknown> = {};
-	if (input.content !== undefined) body.content = input.content;
-	if (input.date !== undefined) body.date = input.date;
-	if (input.status !== undefined) body.status = input.status;
-	if (input.is_pinned !== undefined) body.is_pinned = input.is_pinned;
+	const body = buildWorkMemoUpdateBody(input);
 
-	const response = await fetch(`/api/v1/work-memos/${encodeURIComponent(id)}`, {
+	const response = await fetch(workMemoResourcePath(id), {
 		method: 'PUT',
 		headers: authHeaders(),
 		body: JSON.stringify(body),
@@ -209,6 +219,41 @@ export async function updateWorkMemo(
 	}
 
 	const data = await response.json();
+	return normalizeWorkMemo(data);
+}
+
+/**
+ * Change only a work memo's todo status (Diary Multi-Event V1 — Task 2).
+ *
+ * `PUT /api/v1/work-memos/:id` with the body `{ status }` and nothing else.
+ *
+ * This is the read-only card's write path: an Event that is not open in an
+ * editor has no live body to submit, so reusing `updateWorkMemo` with a full
+ * snapshot would be a stale write waiting to happen. The body is built by
+ * `buildWorkMemoStatusBody`, whose signature cannot carry content, date,
+ * position, tags or `is_pinned`. created/updated are the backend's business.
+ *
+ * An Event that IS open in an editor must not use this — it changes status
+ * through the shared editing session instead, so the save machine's single
+ * snapshot owns both the body and the status and neither can overwrite the
+ * other. See `DiaryEventEditor.svelte`.
+ *
+ * There is no offline queue and no retry: a failure rejects, and the caller
+ * must restore the previous status and say so.
+ */
+export async function updateWorkMemoStatus(
+	id: string,
+	status: WorkMemoStatus,
+	signal?: AbortSignal
+): Promise<WorkMemo> {
+	const data = await updateWorkMemoStatusRequest({
+		fetchFn: (url, init) => fetch(url, init),
+		apiError: handleResponseError,
+		token: pb.authStore.token,
+		id,
+		status,
+		signal
+	});
 	return normalizeWorkMemo(data);
 }
 
@@ -233,7 +278,7 @@ function normalizeWorkMemo(raw: any): WorkMemo {
 		owner: raw.owner || '',
 		date: raw.date || '',
 		content: raw.content || '',
-		status: isValidStatus(raw.status) ? raw.status : 'normal',
+		status: isWorkMemoStatusValue(raw.status) ? raw.status : 'normal',
 		is_pinned: Boolean(raw.is_pinned),
 		position: typeof raw.position === 'number' ? raw.position : 0,
 		tags: Array.isArray(raw.tags) ? raw.tags : [],
@@ -244,8 +289,4 @@ function normalizeWorkMemo(raw: any): WorkMemo {
 
 function normalizeWorkMemos(raws: any[]): WorkMemo[] {
 	return raws.map(normalizeWorkMemo);
-}
-
-function isValidStatus(status: unknown): status is WorkMemoStatus {
-	return status === 'normal' || status === 'pending' || status === 'completed';
 }

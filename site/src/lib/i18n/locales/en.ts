@@ -143,7 +143,15 @@ export const en = {
 		handoffFailed: 'Could not finish saving this event, so it is still open. Please try again.',
 		attachmentsFailed: 'The text was saved, but its images could not be linked. Please try again.',
 		uploadFailed: 'An image upload failed. Remove or retry it before leaving.',
-		leaveBlocked: 'Still saving. Please try again in a moment.'
+		leaveBlocked: 'Still saving. Please try again in a moment.',
+		todoSetPending: 'Set as todo',
+		todoCancel: 'Remove todo',
+		todoMarkComplete: 'Mark as completed',
+		todoReopen: 'Reopen as todo',
+		todoGroupLabel: 'Todo status',
+		todoUpdating: 'Updating...',
+		todoFailed: 'Could not update the todo status. Please try again.',
+		todoNeedsContent: 'Write something first, then set it as a todo.'
 	},
 	search: {
 		pageTitle: 'Search',
